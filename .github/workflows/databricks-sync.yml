@@ -21,6 +21,7 @@ jobs:
       - name: Check out private backup repository
         uses: actions/checkout@v6
       - name: Export Databricks objects to staging
+        id: export
         env:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         shell: bash
@@ -29,6 +30,65 @@ jobs:
           snapshot="$(mktemp -d "$RUNNER_TEMP/databricks-export.XXXXXX")"
           python3 scripts/sync_databricks.py "$snapshot"
           printf 'DATABRICKS_SNAPSHOT=%s\n' "$snapshot" >> "$GITHUB_ENV"
+      - name: Diagnose failed manual export without logging credentials
+        if: ${{ failure() && steps.export.outcome == 'failure' && github.event_name == 'workflow_dispatch' }}
+        env:
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from urllib.error import HTTPError, URLError
+          from urllib.parse import urlencode
+          from urllib.request import Request, build_opener
+          from scripts.sync_databricks import HOST, ROOT, NoRedirect
+
+          token = os.environ.get('DATABRICKS_TOKEN', '')
+          if not token:
+              print('Credential check: secret is empty.')
+              raise SystemExit(0)
+          if not re.fullmatch(r'dapi[A-Za-z0-9]+', token):
+              print('Credential check: secret is not in the usual raw Databricks PAT format.')
+          else:
+              print('Credential check: secret has the usual raw Databricks PAT format.')
+          if any(character.isspace() for character in token):
+              print('Credential check: secret contains whitespace.')
+          if '\r' in token or '\n' in token or not token.isascii():
+              raise SystemExit(0)
+
+          url = HOST + '/api/2.0/workspace/list?' + urlencode({'path': ROOT})
+          request = Request(url, headers={'Authorization': 'Bearer ' + token})
+          try:
+              with build_opener(NoRedirect()).open(request, timeout=10) as response:
+                  print(f'Auth probe: HTTP {response.status}.')
+          except HTTPError as error:
+              print(f'Auth probe: HTTP {error.code}.')
+              try:
+                  body = json.loads(error.read(8192))
+                  code = str(body.get('error_code', '')).lower()
+                  message = str(body.get('message', '')).lower()
+              except (ValueError, AttributeError, OSError):
+                  print('Auth probe: no recognized JSON error body.')
+                  raise SystemExit(0)
+              detail = code + ' ' + message
+              categories = (
+                  (('insufficient_scope', 'insufficient scope', 'required scope', 'token scope'), 'insufficient token scope'),
+                  (('expired', 'revoked'), 'expired or revoked credential'),
+                  (('ip access', 'ip allow', 'ingress'), 'network access policy'),
+                  (('not sent', 'unsupported type', 'missing token'), 'missing or unsupported credential'),
+                  (('invalid token', 'invalid_access_token', 'incorrect credentials', 'invalid access token'), 'invalid credential'),
+              )
+              for patterns, label in categories:
+                  if any(pattern in detail for pattern in patterns):
+                      print('Auth probe category: ' + label + '.')
+                      break
+              else:
+                  print('Auth probe: no recognized error category.')
+          except (URLError, TimeoutError):
+              print('Auth probe: network error or timeout.')
+          PY
       - name: Commit changed snapshot
         shell: bash
         run: |
