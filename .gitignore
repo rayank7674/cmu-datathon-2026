@@ -1,0 +1,15 @@
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.parquet
+*.csv
+*.tsv
+*.xlsx
+*.zip
+*.dbc
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
