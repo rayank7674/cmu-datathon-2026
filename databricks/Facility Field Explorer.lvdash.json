@@ -1,0 +1,4121 @@
+{
+  "datasets": [
+    {
+      "displayName": "Field fill profile",
+      "name": "ds_fill",
+      "queryLines": [
+        "SELECT col AS field,\n",
+        "  count(*) AS total_rows,\n",
+        "  sum(CASE WHEN val IS NOT NULL AND lower(trim(val)) NOT IN ('', 'null', '[]', 'none', 'nan', '{}') THEN 1 ELSE 0 END) AS filled,\n",
+        "  round(100.0 * sum(CASE WHEN val IS NOT NULL AND lower(trim(val)) NOT IN ('', 'null', '[]', 'none', 'nan', '{}') THEN 1 ELSE 0 END) / count(*), 1) AS filled_pct,\n",
+        "  count(DISTINCT val) AS distinct_values,\n",
+        "  sum(CASE WHEN try_cast(val AS double) IS NOT NULL THEN 1 ELSE 0 END) AS numeric_values,\n",
+        "  sum(CASE WHEN val LIKE '[%' THEN 1 ELSE 0 END) AS list_values,\n",
+        "  round(avg(length(val)), 1) AS avg_length,\n",
+        "  max(length(val)) AS max_length\n",
+        "FROM (SELECT stack(51,\n",
+        "  'unique_id', cast(`unique_id` AS string),\n",
+        "  'source_types', cast(`source_types` AS string),\n",
+        "  'source_ids', cast(`source_ids` AS string),\n",
+        "  'source_content_id', cast(`source_content_id` AS string),\n",
+        "  'name', cast(`name` AS string),\n",
+        "  'organization_type', cast(`organization_type` AS string),\n",
+        "  'content_table_id', cast(`content_table_id` AS string),\n",
+        "  'phone_numbers', cast(`phone_numbers` AS string),\n",
+        "  'officialPhone', cast(`officialPhone` AS string),\n",
+        "  'email', cast(`email` AS string),\n",
+        "  'websites', cast(`websites` AS string),\n",
+        "  'officialWebsite', cast(`officialWebsite` AS string),\n",
+        "  'yearEstablished', cast(`yearEstablished` AS string),\n",
+        "  'acceptsVolunteers', cast(`acceptsVolunteers` AS string),\n",
+        "  'facebookLink', cast(`facebookLink` AS string),\n",
+        "  'address_line1', cast(`address_line1` AS string),\n",
+        "  'address_line2', cast(`address_line2` AS string),\n",
+        "  'address_line3', cast(`address_line3` AS string),\n",
+        "  'address_city', cast(`address_city` AS string),\n",
+        "  'address_stateOrRegion', cast(`address_stateOrRegion` AS string),\n",
+        "  'address_zipOrPostcode', cast(`address_zipOrPostcode` AS string),\n",
+        "  'address_country', cast(`address_country` AS string),\n",
+        "  'address_countryCode', cast(`address_countryCode` AS string),\n",
+        "  'countries', cast(`countries` AS string),\n",
+        "  'facilityTypeId', cast(`facilityTypeId` AS string),\n",
+        "  'operatorTypeId', cast(`operatorTypeId` AS string),\n",
+        "  'affiliationTypeIds', cast(`affiliationTypeIds` AS string),\n",
+        "  'description', cast(`description` AS string),\n",
+        "  'area', cast(`area` AS string),\n",
+        "  'numberDoctors', cast(`numberDoctors` AS string),\n",
+        "  'capacity', cast(`capacity` AS string),\n",
+        "  'specialties', cast(`specialties` AS string),\n",
+        "  'procedure', cast(`procedure` AS string),\n",
+        "  'equipment', cast(`equipment` AS string),\n",
+        "  'capability', cast(`capability` AS string),\n",
+        "  'recency_of_page_update', cast(`recency_of_page_update` AS string),\n",
+        "  'distinct_social_media_presence_count', cast(`distinct_social_media_presence_count` AS string),\n",
+        "  'affiliated_staff_presence', cast(`affiliated_staff_presence` AS string),\n",
+        "  'custom_logo_presence', cast(`custom_logo_presence` AS string),\n",
+        "  'number_of_facts_about_the_organization', cast(`number_of_facts_about_the_organization` AS string),\n",
+        "  'post_metrics_most_recent_social_media_post_date', cast(`post_metrics_most_recent_social_media_post_date` AS string),\n",
+        "  'post_metrics_post_count', cast(`post_metrics_post_count` AS string),\n",
+        "  'engagement_metrics_n_followers', cast(`engagement_metrics_n_followers` AS string),\n",
+        "  'engagement_metrics_n_likes', cast(`engagement_metrics_n_likes` AS string),\n",
+        "  'engagement_metrics_n_engagements', cast(`engagement_metrics_n_engagements` AS string),\n",
+        "  'source', cast(`source` AS string),\n",
+        "  'coordinates', cast(`coordinates` AS string),\n",
+        "  'latitude', cast(`latitude` AS string),\n",
+        "  'longitude', cast(`longitude` AS string),\n",
+        "  'cluster_id', cast(`cluster_id` AS string),\n",
+        "  'source_urls', cast(`source_urls` AS string)) AS (col, val) FROM databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset.facilities)\n",
+        "GROUP BY col\n"
+      ]
+    },
+    {
+      "displayName": "Fields under 95% filled",
+      "name": "ds_fill_sparse",
+      "queryLines": [
+        "SELECT field, filled_pct, 100 - filled_pct AS missing_pct FROM (\n",
+        "SELECT col AS field,\n",
+        "  count(*) AS total_rows,\n",
+        "  sum(CASE WHEN val IS NOT NULL AND lower(trim(val)) NOT IN ('', 'null', '[]', 'none', 'nan', '{}') THEN 1 ELSE 0 END) AS filled,\n",
+        "  round(100.0 * sum(CASE WHEN val IS NOT NULL AND lower(trim(val)) NOT IN ('', 'null', '[]', 'none', 'nan', '{}') THEN 1 ELSE 0 END) / count(*), 1) AS filled_pct,\n",
+        "  count(DISTINCT val) AS distinct_values,\n",
+        "  sum(CASE WHEN try_cast(val AS double) IS NOT NULL THEN 1 ELSE 0 END) AS numeric_values,\n",
+        "  sum(CASE WHEN val LIKE '[%' THEN 1 ELSE 0 END) AS list_values,\n",
+        "  round(avg(length(val)), 1) AS avg_length,\n",
+        "  max(length(val)) AS max_length\n",
+        "FROM (SELECT stack(51,\n",
+        "  'unique_id', cast(`unique_id` AS string),\n",
+        "  'source_types', cast(`source_types` AS string),\n",
+        "  'source_ids', cast(`source_ids` AS string),\n",
+        "  'source_content_id', cast(`source_content_id` AS string),\n",
+        "  'name', cast(`name` AS string),\n",
+        "  'organization_type', cast(`organization_type` AS string),\n",
+        "  'content_table_id', cast(`content_table_id` AS string),\n",
+        "  'phone_numbers', cast(`phone_numbers` AS string),\n",
+        "  'officialPhone', cast(`officialPhone` AS string),\n",
+        "  'email', cast(`email` AS string),\n",
+        "  'websites', cast(`websites` AS string),\n",
+        "  'officialWebsite', cast(`officialWebsite` AS string),\n",
+        "  'yearEstablished', cast(`yearEstablished` AS string),\n",
+        "  'acceptsVolunteers', cast(`acceptsVolunteers` AS string),\n",
+        "  'facebookLink', cast(`facebookLink` AS string),\n",
+        "  'address_line1', cast(`address_line1` AS string),\n",
+        "  'address_line2', cast(`address_line2` AS string),\n",
+        "  'address_line3', cast(`address_line3` AS string),\n",
+        "  'address_city', cast(`address_city` AS string),\n",
+        "  'address_stateOrRegion', cast(`address_stateOrRegion` AS string),\n",
+        "  'address_zipOrPostcode', cast(`address_zipOrPostcode` AS string),\n",
+        "  'address_country', cast(`address_country` AS string),\n",
+        "  'address_countryCode', cast(`address_countryCode` AS string),\n",
+        "  'countries', cast(`countries` AS string),\n",
+        "  'facilityTypeId', cast(`facilityTypeId` AS string),\n",
+        "  'operatorTypeId', cast(`operatorTypeId` AS string),\n",
+        "  'affiliationTypeIds', cast(`affiliationTypeIds` AS string),\n",
+        "  'description', cast(`description` AS string),\n",
+        "  'area', cast(`area` AS string),\n",
+        "  'numberDoctors', cast(`numberDoctors` AS string),\n",
+        "  'capacity', cast(`capacity` AS string),\n",
+        "  'specialties', cast(`specialties` AS string),\n",
+        "  'procedure', cast(`procedure` AS string),\n",
+        "  'equipment', cast(`equipment` AS string),\n",
+        "  'capability', cast(`capability` AS string),\n",
+        "  'recency_of_page_update', cast(`recency_of_page_update` AS string),\n",
+        "  'distinct_social_media_presence_count', cast(`distinct_social_media_presence_count` AS string),\n",
+        "  'affiliated_staff_presence', cast(`affiliated_staff_presence` AS string),\n",
+        "  'custom_logo_presence', cast(`custom_logo_presence` AS string),\n",
+        "  'number_of_facts_about_the_organization', cast(`number_of_facts_about_the_organization` AS string),\n",
+        "  'post_metrics_most_recent_social_media_post_date', cast(`post_metrics_most_recent_social_media_post_date` AS string),\n",
+        "  'post_metrics_post_count', cast(`post_metrics_post_count` AS string),\n",
+        "  'engagement_metrics_n_followers', cast(`engagement_metrics_n_followers` AS string),\n",
+        "  'engagement_metrics_n_likes', cast(`engagement_metrics_n_likes` AS string),\n",
+        "  'engagement_metrics_n_engagements', cast(`engagement_metrics_n_engagements` AS string),\n",
+        "  'source', cast(`source` AS string),\n",
+        "  'coordinates', cast(`coordinates` AS string),\n",
+        "  'latitude', cast(`latitude` AS string),\n",
+        "  'longitude', cast(`longitude` AS string),\n",
+        "  'cluster_id', cast(`cluster_id` AS string),\n",
+        "  'source_urls', cast(`source_urls` AS string)) AS (col, val) FROM databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset.facilities)\n",
+        "GROUP BY col\n",
+        ") WHERE filled_pct < 95\n"
+      ]
+    },
+    {
+      "displayName": "Facilities, cleaned",
+      "name": "ds_clean",
+      "queryLines": [
+        "WITH base AS (\n",
+        "  SELECT unique_id, name, address_city AS city, address_zipOrPostcode AS postcode,\n",
+        "    CASE initcap(lower(trim(address_stateOrRegion))) WHEN 'Tamilnadu' THEN 'Tamil Nadu' WHEN 'Orissa' THEN 'Odisha' WHEN 'Pondicherry' THEN 'Puducherry' WHEN 'Uttaranchal' THEN 'Uttarakhand' WHEN 'New Delhi' THEN 'Delhi' WHEN 'Jammu & Kashmir' THEN 'Jammu And Kashmir' ELSE initcap(lower(trim(address_stateOrRegion))) END AS state_norm,\n",
+        "    CASE WHEN facilityTypeId IN ('hospital', 'clinic', 'dentist', 'doctor') THEN facilityTypeId WHEN facilityTypeId IN ('pharmacy', 'farmacy') THEN 'pharmacy' ELSE 'unknown' END AS facility_type,\n",
+        "    CASE WHEN operatorTypeId IN ('public', 'government') THEN 'public' WHEN operatorTypeId = 'private' THEN 'private' ELSE 'unknown' END AS operator_type,\n",
+        "    latitude, longitude,\n",
+        "    try_cast(capacity AS double) AS beds,\n",
+        "    try_cast(numberDoctors AS double) AS doctors,\n",
+        "    try_cast(yearEstablished AS int) AS yr,\n",
+        "    from_json(source_ids, 'array<string>') AS src_arr,\n",
+        "    from_json(specialties, 'array<string>') AS spec_arr,\n",
+        "    from_json(procedure, 'array<string>') AS proc_arr,\n",
+        "    from_json(equipment, 'array<string>') AS equip_arr,\n",
+        "    length(description) AS description_length\n",
+        "  FROM databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset.facilities\n",
+        "  WHERE latitude IS NOT NULL\n",
+        ")\n",
+        "SELECT unique_id, name, city, state_norm AS state_as_written,\n",
+        "  CASE WHEN state_norm IN ('Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Delhi', 'Chandigarh', 'Puducherry', 'Jammu And Kashmir', 'Ladakh') THEN state_norm ELSE 'Other or not a state' END AS state,\n",
+        "  facility_type, operator_type, latitude, longitude,\n",
+        "  CASE WHEN beds > 0 THEN beds END AS beds,\n",
+        "  CASE WHEN doctors > 0 THEN doctors END AS doctors,\n",
+        "  CASE WHEN beds > 0 THEN 'Has bed count' ELSE 'No bed count' END AS bed_count_recorded,\n",
+        "  CASE WHEN yr BETWEEN 1800 AND 2026 THEN yr END AS year_established,\n",
+        "  CASE WHEN yr BETWEEN 1950 AND 2026 THEN make_date(yr, 1, 1) END AS established_date,\n",
+        "  CASE WHEN beds IS NULL OR beds <= 0 THEN NULL WHEN beds <= 10 THEN '1) 1-10' WHEN beds <= 25 THEN '2) 11-25' WHEN beds <= 50 THEN '3) 26-50' WHEN beds <= 100 THEN '4) 51-100' WHEN beds <= 250 THEN '5) 101-250' WHEN beds <= 500 THEN '6) 251-500' WHEN beds <= 1000 THEN '7) 501-1,000' WHEN beds <= 5000 THEN '8) 1,001-5,000' ELSE '9) over 5,000' END AS beds_bucket,\n",
+        "  CASE WHEN doctors IS NULL OR doctors <= 0 THEN NULL WHEN doctors = 1 THEN '1) 1' WHEN doctors <= 5 THEN '2) 2-5' WHEN doctors <= 10 THEN '3) 6-10' WHEN doctors <= 25 THEN '4) 11-25' WHEN doctors <= 50 THEN '5) 26-50' WHEN doctors <= 100 THEN '6) 51-100' WHEN doctors <= 500 THEN '7) 101-500' ELSE '8) over 500' END AS doctors_bucket,\n",
+        "  size(src_arr) AS source_count,\n",
+        "  CASE WHEN src_arr IS NULL THEN NULL WHEN size(src_arr) <= 5 THEN '1) 1-5' WHEN size(src_arr) <= 10 THEN '2) 6-10' WHEN size(src_arr) <= 19 THEN '3) 11-19' WHEN size(src_arr) <= 34 THEN '4) 20-34' WHEN size(src_arr) <= 49 THEN '5) 35-49' ELSE '6) 50 (the cap)' END AS source_bucket,\n",
+        "  CASE WHEN spec_arr IS NOT NULL THEN size(filter(spec_arr, x -> x IS NOT NULL AND trim(x) <> '')) END AS n_specialties,\n",
+        "  CASE WHEN proc_arr IS NOT NULL THEN size(filter(proc_arr, x -> x IS NOT NULL AND trim(x) <> '')) END AS n_procedures,\n",
+        "  CASE WHEN equip_arr IS NOT NULL THEN size(filter(equip_arr, x -> x IS NOT NULL AND trim(x) <> '')) END AS n_equipment,\n",
+        "  description_length\n",
+        "FROM base\n"
+      ]
+    },
+    {
+      "displayName": "Beds and doctors, typical range",
+      "name": "ds_size",
+      "queryLines": [
+        "SELECT name, address_city AS city,\n",
+        "  CASE WHEN facilityTypeId IN ('hospital', 'clinic', 'dentist', 'doctor') THEN facilityTypeId ELSE 'other' END AS facility_type,\n",
+        "  try_cast(capacity AS double) AS beds, try_cast(numberDoctors AS double) AS doctors\n",
+        "FROM databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset.facilities\n",
+        "WHERE latitude IS NOT NULL\n",
+        "  AND try_cast(capacity AS double) BETWEEN 1 AND 1500\n",
+        "  AND try_cast(numberDoctors AS double) BETWEEN 1 AND 400\n"
+      ]
+    },
+    {
+      "displayName": "Records that need a second look",
+      "name": "ds_suspects",
+      "queryLines": [
+        "WITH base AS (\n",
+        "  SELECT unique_id, name, address_city AS city, address_zipOrPostcode AS postcode,\n",
+        "    CASE initcap(lower(trim(address_stateOrRegion))) WHEN 'Tamilnadu' THEN 'Tamil Nadu' WHEN 'Orissa' THEN 'Odisha' WHEN 'Pondicherry' THEN 'Puducherry' WHEN 'Uttaranchal' THEN 'Uttarakhand' WHEN 'New Delhi' THEN 'Delhi' WHEN 'Jammu & Kashmir' THEN 'Jammu And Kashmir' ELSE initcap(lower(trim(address_stateOrRegion))) END AS state_norm,\n",
+        "    CASE WHEN facilityTypeId IN ('hospital', 'clinic', 'dentist', 'doctor') THEN facilityTypeId WHEN facilityTypeId IN ('pharmacy', 'farmacy') THEN 'pharmacy' ELSE 'unknown' END AS facility_type,\n",
+        "    CASE WHEN operatorTypeId IN ('public', 'government') THEN 'public' WHEN operatorTypeId = 'private' THEN 'private' ELSE 'unknown' END AS operator_type,\n",
+        "    latitude, longitude,\n",
+        "    try_cast(capacity AS double) AS beds,\n",
+        "    try_cast(numberDoctors AS double) AS doctors,\n",
+        "    try_cast(yearEstablished AS int) AS yr,\n",
+        "    from_json(source_ids, 'array<string>') AS src_arr,\n",
+        "    from_json(specialties, 'array<string>') AS spec_arr,\n",
+        "    from_json(procedure, 'array<string>') AS proc_arr,\n",
+        "    from_json(equipment, 'array<string>') AS equip_arr,\n",
+        "    length(description) AS description_length\n",
+        "  FROM databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset.facilities\n",
+        "  WHERE latitude IS NOT NULL\n",
+        "),\n",
+        "st AS (\n",
+        "  SELECT state_norm, percentile_approx(latitude, 0.5) AS mlat, percentile_approx(longitude, 0.5) AS mlon\n",
+        "  FROM base WHERE state_norm IN ('Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Delhi', 'Chandigarh', 'Puducherry', 'Jammu And Kashmir', 'Ladakh') GROUP BY state_norm HAVING count(*) >= 30\n",
+        "),\n",
+        "pin AS (\n",
+        "  SELECT pincode, max(CASE initcap(lower(trim(statename))) WHEN 'Orissa' THEN 'Odisha' WHEN 'Pondicherry' THEN 'Puducherry' WHEN 'Jammu & Kashmir' THEN 'Jammu And Kashmir' ELSE initcap(lower(trim(statename))) END) AS pin_state, count(DISTINCT statename) AS n_states\n",
+        "  FROM databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset.india_post_pincode_directory GROUP BY pincode\n",
+        "),\n",
+        "dup AS (\n",
+        "  SELECT lower(trim(name)) AS k_name, lower(trim(city)) AS k_city FROM base WHERE name IS NOT NULL AND name <> 'null' GROUP BY 1, 2 HAVING count(*) > 1\n",
+        ")\n",
+        "SELECT 'Over 2,000 beds' AS reason, name, city, state_norm AS state, facility_type, cast(cast(beds AS bigint) AS string) AS detail FROM base WHERE beds > 2000\n",
+        "UNION ALL SELECT 'Over 500 doctors', name, city, state_norm, facility_type, cast(cast(doctors AS bigint) AS string) FROM base WHERE doctors > 500\n",
+        "UNION ALL SELECT 'Clinic, dentist or doctor with over 200 beds', name, city, state_norm, facility_type, cast(cast(beds AS bigint) AS string) FROM base WHERE facility_type IN ('clinic', 'dentist', 'doctor') AND beds > 200\n",
+        "UNION ALL SELECT 'Year established before 1800 or after 2026', name, city, state_norm, facility_type, cast(yr AS string) FROM base WHERE yr < 1800 OR yr > 2026\n",
+        "UNION ALL SELECT 'Coordinates outside India', name, city, state_norm, facility_type, concat(cast(round(latitude, 2) AS string), ', ', cast(round(longitude, 2) AS string)) FROM base WHERE NOT (latitude BETWEEN 6 AND 37 AND longitude BETWEEN 68 AND 98)\n",
+        "UNION ALL SELECT 'Coordinates far from the stated state', b.name, b.city, b.state_norm, b.facility_type, concat(cast(round(b.latitude, 2) AS string), ', ', cast(round(b.longitude, 2) AS string)) FROM base b JOIN st ON b.state_norm = st.state_norm WHERE (abs(b.latitude - st.mlat) > 4 OR abs(b.longitude - st.mlon) > 4) AND b.latitude BETWEEN 6 AND 37 AND b.longitude BETWEEN 68 AND 98\n",
+        "UNION ALL SELECT 'Postcode belongs to a different state', b.name, b.city, b.state_norm, b.facility_type, concat(b.postcode, ' is in ', pin.pin_state) FROM base b JOIN pin ON try_cast(regexp_replace(b.postcode, '[^0-9]', '') AS bigint) = pin.pincode WHERE pin.n_states = 1 AND b.state_norm IN ('Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Delhi', 'Chandigarh', 'Puducherry', 'Jammu And Kashmir', 'Ladakh') AND pin.pin_state IN ('Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Delhi', 'Chandigarh', 'Puducherry', 'Jammu And Kashmir', 'Ladakh') AND b.state_norm <> pin.pin_state\n",
+        "UNION ALL SELECT 'One doctor but 30 or more specialties', name, city, state_norm, facility_type, concat(cast(size(spec_arr) AS string), ' specialties') FROM base WHERE doctors = 1 AND size(spec_arr) >= 30\n",
+        "UNION ALL SELECT 'Same name and city as another record', b.name, b.city, b.state_norm, b.facility_type, 'duplicate' FROM base b JOIN dup ON lower(trim(b.name)) = dup.k_name AND lower(trim(b.city)) = dup.k_city\n"
+      ]
+    },
+    {
+      "displayName": "Service keyword matches by field",
+      "name": "ds_keywords",
+      "queryLines": [
+        "WITH k AS (SELECT explode(array(\n",
+        "  named_struct('kw', 'dialysis', 're', '(?i)dialysis'),\n",
+        "  named_struct('kw', 'NICU / neonatal', 're', '(?i)nicu|neonatal'),\n",
+        "  named_struct('kw', 'MRI', 're', '(?i)\\\\bmri\\\\b|magnetic resonance'),\n",
+        "  named_struct('kw', 'C-section', 're', '(?i)c-section|cesarean|caesarean|lscs'),\n",
+        "  named_struct('kw', 'cardiac surgery', 're', '(?i)cardiac surg|cardiothoracic|bypass|cabg|open heart'),\n",
+        "  named_struct('kw', 'burn care', 're', '(?i)\\\\bburns?\\\\b'),\n",
+        "  named_struct('kw', 'trauma', 're', '(?i)trauma'),\n",
+        "  named_struct('kw', 'ICU', 're', '(?i)\\\\bicu\\\\b|intensive care'),\n",
+        "  named_struct('kw', 'CT scan', 're', '(?i)\\\\bct\\\\b|computed tomography'),\n",
+        "  named_struct('kw', 'ventilator', 're', '(?i)ventilator'),\n",
+        "  named_struct('kw', 'blood bank', 're', '(?i)blood bank'),\n",
+        "  named_struct('kw', 'cancer / oncology', 're', '(?i)oncolog|cancer|chemotherap'),\n",
+        "  named_struct('kw', 'emergency', 're', '(?i)emergency'),\n",
+        "  named_struct('kw', 'ambulance', 're', '(?i)ambulance'))) AS p)\n",
+        "SELECT p.kw AS keyword,\n",
+        "  sum(CASE WHEN concat_ws(' ', specialties, procedure, equipment, capability, description) RLIKE p.re THEN 1 ELSE 0 END) AS any_field,\n",
+        "  sum(CASE WHEN specialties RLIKE p.re THEN 1 ELSE 0 END) AS in_specialties,\n",
+        "  sum(CASE WHEN procedure RLIKE p.re THEN 1 ELSE 0 END) AS in_procedure,\n",
+        "  sum(CASE WHEN equipment RLIKE p.re THEN 1 ELSE 0 END) AS in_equipment,\n",
+        "  sum(CASE WHEN capability RLIKE p.re THEN 1 ELSE 0 END) AS in_capability,\n",
+        "  sum(CASE WHEN description RLIKE p.re THEN 1 ELSE 0 END) AS in_description,\n",
+        "  sum(CASE WHEN (coalesce(cast(specialties RLIKE p.re AS int), 0) + coalesce(cast(procedure RLIKE p.re AS int), 0) + coalesce(cast(equipment RLIKE p.re AS int), 0) + coalesce(cast(capability RLIKE p.re AS int), 0) + coalesce(cast(description RLIKE p.re AS int), 0)) = 1 THEN 1 ELSE 0 END) AS in_one_field_only,\n",
+        "  sum(CASE WHEN (coalesce(cast(specialties RLIKE p.re AS int), 0) + coalesce(cast(procedure RLIKE p.re AS int), 0) + coalesce(cast(equipment RLIKE p.re AS int), 0) + coalesce(cast(capability RLIKE p.re AS int), 0) + coalesce(cast(description RLIKE p.re AS int), 0)) >= 3 THEN 1 ELSE 0 END) AS in_three_or_more_fields\n",
+        "FROM databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset.facilities CROSS JOIN k\n",
+        "WHERE latitude IS NOT NULL\n",
+        "GROUP BY p.kw\n"
+      ]
+    },
+    {
+      "displayName": "Service claims by strength of evidence",
+      "name": "ds_kwstrength",
+      "queryLines": [
+        "WITH k AS (SELECT explode(array(\n",
+        "  named_struct('kw', 'dialysis', 're', '(?i)dialysis'),\n",
+        "  named_struct('kw', 'NICU / neonatal', 're', '(?i)nicu|neonatal'),\n",
+        "  named_struct('kw', 'MRI', 're', '(?i)\\\\bmri\\\\b|magnetic resonance'),\n",
+        "  named_struct('kw', 'C-section', 're', '(?i)c-section|cesarean|caesarean|lscs'),\n",
+        "  named_struct('kw', 'cardiac surgery', 're', '(?i)cardiac surg|cardiothoracic|bypass|cabg|open heart'),\n",
+        "  named_struct('kw', 'burn care', 're', '(?i)\\\\bburns?\\\\b'),\n",
+        "  named_struct('kw', 'trauma', 're', '(?i)trauma'),\n",
+        "  named_struct('kw', 'ICU', 're', '(?i)\\\\bicu\\\\b|intensive care'),\n",
+        "  named_struct('kw', 'CT scan', 're', '(?i)\\\\bct\\\\b|computed tomography'),\n",
+        "  named_struct('kw', 'ventilator', 're', '(?i)ventilator'),\n",
+        "  named_struct('kw', 'blood bank', 're', '(?i)blood bank'),\n",
+        "  named_struct('kw', 'cancer / oncology', 're', '(?i)oncolog|cancer|chemotherap'),\n",
+        "  named_struct('kw', 'emergency', 're', '(?i)emergency'),\n",
+        "  named_struct('kw', 'ambulance', 're', '(?i)ambulance'))) AS p),\n",
+        "m AS (\n",
+        "  SELECT p.kw AS keyword,\n",
+        "    coalesce(cast(specialties RLIKE p.re AS int), 0) + coalesce(cast(procedure RLIKE p.re AS int), 0) + coalesce(cast(equipment RLIKE p.re AS int), 0) + coalesce(cast(capability RLIKE p.re AS int), 0) + coalesce(cast(description RLIKE p.re AS int), 0) AS n_fields\n",
+        "  FROM databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset.facilities CROSS JOIN k WHERE latitude IS NOT NULL\n",
+        ")\n",
+        "SELECT keyword,\n",
+        "  CASE WHEN n_fields = 1 THEN '1 field (weak)' WHEN n_fields = 2 THEN '2 fields' ELSE '3 or more fields (strong)' END AS evidence,\n",
+        "  count(*) AS facilities\n",
+        "FROM m WHERE n_fields >= 1\n",
+        "GROUP BY 1, 2\n"
+      ]
+    },
+    {
+      "displayName": "Share of facilities mentioning a service, by state",
+      "name": "ds_kwstate",
+      "queryLines": [
+        "WITH k AS (SELECT explode(array(\n",
+        "  named_struct('kw', 'dialysis', 're', '(?i)dialysis'),\n",
+        "  named_struct('kw', 'NICU / neonatal', 're', '(?i)nicu|neonatal'),\n",
+        "  named_struct('kw', 'MRI', 're', '(?i)\\\\bmri\\\\b|magnetic resonance'),\n",
+        "  named_struct('kw', 'C-section', 're', '(?i)c-section|cesarean|caesarean|lscs'),\n",
+        "  named_struct('kw', 'cardiac surgery', 're', '(?i)cardiac surg|cardiothoracic|bypass|cabg|open heart'),\n",
+        "  named_struct('kw', 'burn care', 're', '(?i)\\\\bburns?\\\\b'),\n",
+        "  named_struct('kw', 'trauma', 're', '(?i)trauma'),\n",
+        "  named_struct('kw', 'ICU', 're', '(?i)\\\\bicu\\\\b|intensive care'),\n",
+        "  named_struct('kw', 'CT scan', 're', '(?i)\\\\bct\\\\b|computed tomography'),\n",
+        "  named_struct('kw', 'ventilator', 're', '(?i)ventilator'),\n",
+        "  named_struct('kw', 'blood bank', 're', '(?i)blood bank'),\n",
+        "  named_struct('kw', 'cancer / oncology', 're', '(?i)oncolog|cancer|chemotherap'),\n",
+        "  named_struct('kw', 'emergency', 're', '(?i)emergency'),\n",
+        "  named_struct('kw', 'ambulance', 're', '(?i)ambulance'))) AS p),\n",
+        "f AS (\n",
+        "  SELECT CASE initcap(lower(trim(address_stateOrRegion))) WHEN 'Tamilnadu' THEN 'Tamil Nadu' WHEN 'Orissa' THEN 'Odisha' WHEN 'Pondicherry' THEN 'Puducherry' WHEN 'Uttaranchal' THEN 'Uttarakhand' WHEN 'New Delhi' THEN 'Delhi' WHEN 'Jammu & Kashmir' THEN 'Jammu And Kashmir' ELSE initcap(lower(trim(address_stateOrRegion))) END AS state, concat_ws(' ', specialties, procedure, equipment, capability, description) AS txt\n",
+        "  FROM databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset.facilities WHERE latitude IS NOT NULL\n",
+        ")\n",
+        "SELECT f.state AS state, k.p.kw AS keyword, count(*) AS facilities_in_state,\n",
+        "  sum(CASE WHEN f.txt RLIKE k.p.re THEN 1 ELSE 0 END) AS facilities_mentioning,\n",
+        "  round(100.0 * avg(CASE WHEN f.txt RLIKE k.p.re THEN 1 ELSE 0 END), 1) AS pct_mentioning\n",
+        "FROM f CROSS JOIN k\n",
+        "WHERE f.state IN ('Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Delhi', 'Chandigarh', 'Puducherry', 'Jammu And Kashmir', 'Ladakh')\n",
+        "GROUP BY f.state, k.p.kw\n",
+        "HAVING count(*) >= 100\n"
+      ]
+    },
+    {
+      "displayName": "Top specialties",
+      "name": "ds_specialties",
+      "queryLines": [
+        "SELECT specialty, count(*) AS facilities\n",
+        "FROM (SELECT explode(array_distinct(transform(from_json(specialties, 'array<string>'), x -> x))) AS specialty FROM databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset.facilities WHERE latitude IS NOT NULL)\n",
+        "WHERE specialty IS NOT NULL AND specialty <> ''\n",
+        "GROUP BY specialty\n",
+        "ORDER BY facilities DESC\n",
+        "LIMIT 20\n"
+      ]
+    },
+    {
+      "displayName": "Top equipment items",
+      "name": "ds_equipment",
+      "queryLines": [
+        "SELECT item, count(*) AS facilities\n",
+        "FROM (SELECT explode(array_distinct(transform(from_json(equipment, 'array<string>'), x -> lower(trim(x))))) AS item FROM databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset.facilities WHERE latitude IS NOT NULL)\n",
+        "WHERE item IS NOT NULL AND item <> ''\n",
+        "GROUP BY item\n",
+        "ORDER BY facilities DESC\n",
+        "LIMIT 20\n"
+      ]
+    },
+    {
+      "displayName": "Top procedures",
+      "name": "ds_procedures",
+      "queryLines": [
+        "SELECT item, count(*) AS facilities\n",
+        "FROM (SELECT explode(array_distinct(transform(from_json(procedure, 'array<string>'), x -> lower(trim(x))))) AS item FROM databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset.facilities WHERE latitude IS NOT NULL)\n",
+        "WHERE item IS NOT NULL AND item <> ''\n",
+        "GROUP BY item\n",
+        "ORDER BY facilities DESC\n",
+        "LIMIT 20\n"
+      ]
+    },
+    {
+      "displayName": "Top source websites",
+      "name": "ds_domains",
+      "queryLines": [
+        "SELECT domain, count(*) AS facilities\n",
+        "FROM (SELECT explode(array_distinct(transform(from_json(source_urls, 'array<string>'), x -> lower(regexp_extract(x, '^(?:https?://)?(?:www\\\\.)?([^/]+)', 1))))) AS domain FROM databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset.facilities WHERE latitude IS NOT NULL)\n",
+        "WHERE domain IS NOT NULL AND domain <> ''\n",
+        "GROUP BY domain\n",
+        "ORDER BY facilities DESC\n",
+        "LIMIT 20\n"
+      ]
+    },
+    {
+      "displayName": "Completeness by facility type",
+      "name": "ds_bytype",
+      "queryLines": [
+        "SELECT CASE WHEN facilityTypeId IN ('hospital', 'clinic', 'dentist', 'doctor') THEN facilityTypeId ELSE 'other or unknown' END AS facility_type,\n",
+        "  count(*) AS facilities,\n",
+        "  round(100.0 * avg(CASE WHEN try_cast(capacity AS double) IS NOT NULL THEN 1 ELSE 0 END), 1) AS pct_with_beds,\n",
+        "  round(100.0 * avg(CASE WHEN try_cast(numberDoctors AS double) IS NOT NULL THEN 1 ELSE 0 END), 1) AS pct_with_doctors,\n",
+        "  round(100.0 * avg(CASE WHEN try_cast(yearEstablished AS double) IS NOT NULL THEN 1 ELSE 0 END), 1) AS pct_with_year,\n",
+        "  round(100.0 * avg(CASE WHEN length(equipment) > 2 THEN 1 ELSE 0 END), 1) AS pct_with_equipment,\n",
+        "  round(100.0 * avg(CASE WHEN length(procedure) > 2 THEN 1 ELSE 0 END), 1) AS pct_with_procedure,\n",
+        "  percentile_approx(try_cast(capacity AS double), 0.5) AS median_beds,\n",
+        "  percentile_approx(try_cast(numberDoctors AS double), 0.5) AS median_doctors\n",
+        "FROM databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset.facilities\n",
+        "WHERE latitude IS NOT NULL\n",
+        "GROUP BY 1\n"
+      ]
+    },
+    {
+      "displayName": "Data quality counts",
+      "name": "ds_quality",
+      "queryLines": [
+        "SELECT count(*) AS total_rows,\n",
+        "  sum(CASE WHEN latitude IS NOT NULL THEN 1 ELSE 0 END) AS usable_rows,\n",
+        "  count(*) - count(DISTINCT unique_id) AS duplicate_unique_ids,\n",
+        "  sum(CASE WHEN latitude IS NULL THEN 1 ELSE 0 END) AS rows_without_coordinates,\n",
+        "  sum(CASE WHEN latitude IS NOT NULL AND NOT (latitude BETWEEN 6 AND 37 AND longitude BETWEEN 68 AND 98) THEN 1 ELSE 0 END) AS coordinates_outside_india,\n",
+        "  sum(CASE WHEN size(from_json(source_ids, 'array<string>')) >= 20 THEN 1 ELSE 0 END) AS rows_with_20plus_sources,\n",
+        "  round(100.0 * sum(CASE WHEN size(from_json(source_ids, 'array<string>')) >= 20 THEN 1 ELSE 0 END) / count(*), 1) AS pct_with_20plus_sources\n",
+        "FROM databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset.facilities\n"
+      ]
+    },
+    {
+      "displayName": "Facilities by district (via PIN code)",
+      "name": "ds_district",
+      "queryLines": [
+        "WITH f AS (\n",
+        "  SELECT try_cast(regexp_replace(address_zipOrPostcode, '[^0-9]', '') AS bigint) AS pin\n",
+        "  FROM databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset.facilities WHERE latitude IS NOT NULL\n",
+        "), p AS (\n",
+        "  SELECT pincode, max(initcap(lower(trim(district)))) AS district, max(initcap(lower(trim(statename)))) AS state\n",
+        "  FROM databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset.india_post_pincode_directory GROUP BY pincode\n",
+        ")\n",
+        "SELECT coalesce(p.district, '(PIN not matched)') AS district, coalesce(p.state, '(PIN not matched)') AS state, count(*) AS facilities\n",
+        "FROM f LEFT JOIN p ON f.pin = p.pincode\n",
+        "GROUP BY 1, 2\n",
+        "ORDER BY facilities DESC\n"
+      ]
+    },
+    {
+      "displayName": "Facility care levels",
+      "name": "ds_lv",
+      "queryLines": [
+        "SELECT facility_id, name, facility_type, operator_type, city, district, state, latitude, longitude,\n",
+        "  care_level, coalesce(concat('Rung ', care_level), 'No rung') AS rung,\n",
+        "  care_level_label, level_kind, level_basis, level_confidence,\n",
+        "  coalesce(newborn_level, 'None listed') AS newborn_level,\n",
+        "  coalesce(obstetric_level, 'None listed') AS obstetric_level,\n",
+        "  coalesce(trauma_level, 'None listed') AS trauma_level,\n",
+        "  coalesce(dialysis_level, 'None listed') AS dialysis_level,\n",
+        "  CASE WHEN nabh_claimed THEN 'yes' ELSE '' END AS nabh_claimed,\n",
+        "  CASE WHEN pmjay_claimed THEN 'yes' ELSE '' END AS pmjay_claimed,\n",
+        "  level_reason, quality_score,\n",
+        "  coalesce(x.level_check, 'no outside record') AS outside_check,\n",
+        "  coalesce(x.external_evidence, '') AS outside_evidence\n",
+        "FROM workspace.vf_gold.facility_level LEFT JOIN workspace.vf_gold.facility_external_check x USING (facility_id, care_level, operator_type)\n"
+      ]
+    },
+    {
+      "displayName": "Care level headline numbers",
+      "name": "ds_lv_sum",
+      "queryLines": [
+        "SELECT\n",
+        "  count(*) AS facilities,\n",
+        "  count_if(care_level IS NOT NULL) AS with_rung,\n",
+        "  count_if(level_confidence = 'high') AS high_conf,\n",
+        "  count_if(care_level = 5) AS rung5,\n",
+        "  count_if(obstetric_level LIKE 'CEmONC%') AS cemonc,\n",
+        "  count_if(newborn_level LIKE 'NICU%') AS nicu,\n",
+        "  (SELECT count_if(level_check = 'confirms') FROM workspace.vf_gold.facility_external_check) AS confirmed_outside\n",
+        "FROM workspace.vf_gold.facility_level\n"
+      ]
+    },
+    {
+      "displayName": "Care level mix by state",
+      "name": "ds_lv_state",
+      "queryLines": [
+        "WITH s AS (\n",
+        "  SELECT state, coalesce(concat('Rung ', care_level), 'No rung') AS rung, count(*) AS n\n",
+        "  FROM workspace.vf_gold.facility_level WHERE state IS NOT NULL GROUP BY ALL\n",
+        ")\n",
+        "SELECT state, rung, n, round(100.0 * n / sum(n) OVER (PARTITION BY state), 1) AS pct\n",
+        "FROM s WHERE state IN (SELECT state FROM workspace.vf_gold.facility_level GROUP BY state HAVING count(*) >= 100)\n"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "displayName": "Overview",
+      "layout": [
+        {
+          "position": {
+            "height": 4,
+            "width": 6,
+            "x": 0,
+            "y": 0
+          },
+          "widget": {
+            "multilineTextboxSpec": {
+              "lines": [
+                "# Facility Field Explorer\n",
+                "An eye test of the Virtue Foundation facilities table before you build on it. Everything runs live against `databricks_virtue_foundation_dataset_dais_2026.virtue_foundation_dataset`.\n",
+                "\n",
+                "**How to read it:** every field was scraped from the web, so treat each value as a claim. Charts on every page except *Field completeness* leave out rows with no coordinates, which are mostly broken imports. Use the pages at the top to move between completeness, size and outliers, record trust, and service claims."
+              ]
+            },
+            "name": "txt001"
+          }
+        },
+        {
+          "position": {
+            "height": 2,
+            "width": 1,
+            "x": 0,
+            "y": 4
+          },
+          "widget": {
+            "name": "cnt002",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_quality",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "SUM(`total_rows`)",
+                      "name": "sum(total_rows)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "value": {
+                  "displayName": "Rows in the table",
+                  "fieldName": "sum(total_rows)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Rows in the table"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 2,
+            "width": 1,
+            "x": 1,
+            "y": 4
+          },
+          "widget": {
+            "name": "cnt003",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_quality",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "SUM(`usable_rows`)",
+                      "name": "sum(usable_rows)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "value": {
+                  "displayName": "Usable rows (have coordinates)",
+                  "fieldName": "sum(usable_rows)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Usable rows (have coordinates)"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 2,
+            "width": 1,
+            "x": 2,
+            "y": 4
+          },
+          "widget": {
+            "name": "cnt004",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_quality",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "SUM(`rows_without_coordinates`)",
+                      "name": "sum(rows_without_coordinates)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "value": {
+                  "displayName": "Rows with no coordinates",
+                  "fieldName": "sum(rows_without_coordinates)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Rows with no coordinates"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 2,
+            "width": 1,
+            "x": 3,
+            "y": 4
+          },
+          "widget": {
+            "name": "cnt005",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_quality",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "SUM(`rows_with_20plus_sources`)",
+                      "name": "sum(rows_with_20plus_sources)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "value": {
+                  "displayName": "Rows built from 20+ sources",
+                  "fieldName": "sum(rows_with_20plus_sources)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Rows built from 20+ sources"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 2,
+            "width": 1,
+            "x": 4,
+            "y": 4
+          },
+          "widget": {
+            "name": "cnt006",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_quality",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "SUM(`duplicate_unique_ids`)",
+                      "name": "sum(duplicate_unique_ids)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "value": {
+                  "displayName": "Duplicate unique_id values",
+                  "fieldName": "sum(duplicate_unique_ids)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Duplicate unique_id values"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 2,
+            "width": 1,
+            "x": 5,
+            "y": 4
+          },
+          "widget": {
+            "name": "cnt007",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_quality",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "SUM(`coordinates_outside_india`)",
+                      "name": "sum(coordinates_outside_india)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "value": {
+                  "displayName": "Coordinates outside India",
+                  "fieldName": "sum(coordinates_outside_india)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Coordinates outside India"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 6,
+            "width": 2,
+            "x": 0,
+            "y": 6
+          },
+          "widget": {
+            "name": "bar008",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_clean",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`facility_type`",
+                      "name": "facility_type"
+                    },
+                    {
+                      "expression": "COUNT(`*`)",
+                      "name": "count(*)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Facilities",
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Facility type",
+                  "fieldName": "facility_type",
+                  "scale": {
+                    "sort": {
+                      "by": "x-reversed"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Facilities by type"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 6,
+            "width": 2,
+            "x": 2,
+            "y": 6
+          },
+          "widget": {
+            "name": "bar009",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_clean",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`operator_type`",
+                      "name": "operator_type"
+                    },
+                    {
+                      "expression": "COUNT(`*`)",
+                      "name": "count(*)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Facilities",
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Operator",
+                  "fieldName": "operator_type",
+                  "scale": {
+                    "sort": {
+                      "by": "x-reversed"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "description": "Unknown means the field is missing or the text 'null'.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Facilities by operator"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 6,
+            "width": 2,
+            "x": 4,
+            "y": 6
+          },
+          "widget": {
+            "name": "bar010",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_clean",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`bed_count_recorded`",
+                      "name": "bed_count_recorded"
+                    },
+                    {
+                      "expression": "COUNT(`*`)",
+                      "name": "count(*)"
+                    },
+                    {
+                      "expression": "`facility_type`",
+                      "name": "facility_type"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "color": {
+                  "displayName": "facility type",
+                  "fieldName": "facility_type",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "x": {
+                  "displayName": "Facilities",
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "bed_count_recorded",
+                  "fieldName": "bed_count_recorded",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "description": "Split by facility type. Bed counts exist almost only for hospitals.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Is a bed count recorded?"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 12,
+            "width": 3,
+            "x": 0,
+            "y": 12
+          },
+          "widget": {
+            "name": "sct011",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_clean",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "`longitude`",
+                      "name": "longitude"
+                    },
+                    {
+                      "expression": "`latitude`",
+                      "name": "latitude"
+                    },
+                    {
+                      "expression": "`facility_type`",
+                      "name": "facility_type"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "color": {
+                  "displayName": "facility type",
+                  "fieldName": "facility_type",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "x": {
+                  "displayName": "Longitude",
+                  "fieldName": "longitude",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Latitude",
+                  "fieldName": "latitude",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "description": "Each dot is a facility at its recorded coordinates. Dots far outside the shape of India are location errors.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Where the facilities are"
+              },
+              "version": 3,
+              "widgetType": "scatter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 12,
+            "width": 3,
+            "x": 3,
+            "y": 12
+          },
+          "widget": {
+            "name": "bar012",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_clean",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`state`",
+                      "name": "state"
+                    },
+                    {
+                      "expression": "COUNT(`*`)",
+                      "name": "count(*)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Facilities",
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "State",
+                  "fieldName": "state",
+                  "scale": {
+                    "sort": {
+                      "by": "x-reversed"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "description": "State names are tidied (for example Tamilnadu to Tamil Nadu). Values that are not a state are grouped as Other.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Facilities by state"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 7,
+            "width": 6,
+            "x": 0,
+            "y": 24
+          },
+          "widget": {
+            "name": "line013",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_clean",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "DATE_TRUNC(\"YEAR\", `established_date`)",
+                      "name": "yearly(established_date)"
+                    },
+                    {
+                      "expression": "COUNT(`*`)",
+                      "name": "count(*)"
+                    },
+                    {
+                      "expression": "`facility_type`",
+                      "name": "facility_type"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "color": {
+                  "displayName": "facility type",
+                  "fieldName": "facility_type",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "x": {
+                  "displayName": "Year established",
+                  "fieldName": "yearly(established_date)",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "displayName": "Facilities",
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "description": "Only about half of records have a year. The dip after 2020 is likely newer facilities with a thinner web footprint, not fewer openings.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Facilities by year established, since 1950"
+              },
+              "version": 3,
+              "widgetType": "line"
+            }
+          }
+        }
+      ],
+      "name": "overview",
+      "pageType": "PAGE_TYPE_CANVAS"
+    },
+    {
+      "displayName": "Field completeness",
+      "layout": [
+        {
+          "position": {
+            "height": 2,
+            "width": 6,
+            "x": 0,
+            "y": 0
+          },
+          "widget": {
+            "multilineTextboxSpec": {
+              "lines": [
+                "## How full is each field?\n",
+                "\"Filled\" means the value is not null, not the text `null`, and not an empty list `[]`. This page counts all rows, including the broken ones."
+              ]
+            },
+            "name": "txt014"
+          }
+        },
+        {
+          "position": {
+            "height": 10,
+            "width": 3,
+            "x": 0,
+            "y": 2
+          },
+          "widget": {
+            "name": "bar015",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_fill_sparse",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`field`",
+                      "name": "field"
+                    },
+                    {
+                      "expression": "SUM(`filled_pct`)",
+                      "name": "sum(filled_pct)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Filled %",
+                  "fieldName": "sum(filled_pct)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Field",
+                  "fieldName": "field",
+                  "scale": {
+                    "sort": {
+                      "by": "x-reversed"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "description": "These are the fields you cannot rely on being present. The other fields are at least 95% filled.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Fields that are less than 95% filled"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 5,
+            "width": 3,
+            "x": 3,
+            "y": 2
+          },
+          "widget": {
+            "name": "tbl016",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_bytype",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "`facility_type`",
+                      "name": "facility_type"
+                    },
+                    {
+                      "expression": "`facilities`",
+                      "name": "facilities"
+                    },
+                    {
+                      "expression": "`pct_with_beds`",
+                      "name": "pct_with_beds"
+                    },
+                    {
+                      "expression": "`pct_with_doctors`",
+                      "name": "pct_with_doctors"
+                    },
+                    {
+                      "expression": "`pct_with_year`",
+                      "name": "pct_with_year"
+                    },
+                    {
+                      "expression": "`pct_with_equipment`",
+                      "name": "pct_with_equipment"
+                    },
+                    {
+                      "expression": "`pct_with_procedure`",
+                      "name": "pct_with_procedure"
+                    },
+                    {
+                      "expression": "`median_beds`",
+                      "name": "median_beds"
+                    },
+                    {
+                      "expression": "`median_doctors`",
+                      "name": "median_doctors"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "columns": [
+                  {
+                    "displayName": "Facility type",
+                    "fieldName": "facility_type"
+                  },
+                  {
+                    "displayName": "Facilities",
+                    "fieldName": "facilities"
+                  },
+                  {
+                    "displayName": "% with beds",
+                    "fieldName": "pct_with_beds"
+                  },
+                  {
+                    "displayName": "% with doctors",
+                    "fieldName": "pct_with_doctors"
+                  },
+                  {
+                    "displayName": "% with year",
+                    "fieldName": "pct_with_year"
+                  },
+                  {
+                    "displayName": "% with equipment",
+                    "fieldName": "pct_with_equipment"
+                  },
+                  {
+                    "displayName": "% with procedure",
+                    "fieldName": "pct_with_procedure"
+                  },
+                  {
+                    "displayName": "Median beds",
+                    "fieldName": "median_beds"
+                  },
+                  {
+                    "displayName": "Median doctors",
+                    "fieldName": "median_doctors"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "How complete records are, by facility type"
+              },
+              "version": 2,
+              "widgetType": "table"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 5,
+            "width": 3,
+            "x": 3,
+            "y": 7
+          },
+          "widget": {
+            "name": "bar017",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_clean",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`state`",
+                      "name": "state"
+                    },
+                    {
+                      "expression": "AVG(`n_equipment`)",
+                      "name": "avg(n_equipment)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Avg equipment items",
+                  "fieldName": "avg(n_equipment)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "State",
+                  "fieldName": "state",
+                  "scale": {
+                    "sort": {
+                      "by": "x-reversed"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "description": "A rough view of how much detail records carry in each state.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Average number of equipment items listed, by state"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 12,
+            "width": 6,
+            "x": 0,
+            "y": 12
+          },
+          "widget": {
+            "name": "tbl018",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_fill",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "`field`",
+                      "name": "field"
+                    },
+                    {
+                      "expression": "`filled_pct`",
+                      "name": "filled_pct"
+                    },
+                    {
+                      "expression": "`filled`",
+                      "name": "filled"
+                    },
+                    {
+                      "expression": "`distinct_values`",
+                      "name": "distinct_values"
+                    },
+                    {
+                      "expression": "`numeric_values`",
+                      "name": "numeric_values"
+                    },
+                    {
+                      "expression": "`list_values`",
+                      "name": "list_values"
+                    },
+                    {
+                      "expression": "`avg_length`",
+                      "name": "avg_length"
+                    },
+                    {
+                      "expression": "`max_length`",
+                      "name": "max_length"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "columns": [
+                  {
+                    "displayName": "Field",
+                    "fieldName": "field"
+                  },
+                  {
+                    "displayName": "Filled %",
+                    "fieldName": "filled_pct"
+                  },
+                  {
+                    "displayName": "Filled rows",
+                    "fieldName": "filled"
+                  },
+                  {
+                    "displayName": "Distinct values",
+                    "fieldName": "distinct_values"
+                  },
+                  {
+                    "displayName": "Parse as number",
+                    "fieldName": "numeric_values"
+                  },
+                  {
+                    "displayName": "Look like a list",
+                    "fieldName": "list_values"
+                  },
+                  {
+                    "displayName": "Avg length",
+                    "fieldName": "avg_length"
+                  },
+                  {
+                    "displayName": "Max length",
+                    "fieldName": "max_length"
+                  }
+                ]
+              },
+              "frame": {
+                "description": "Sort by any column. 'Parse as number' and 'Look like a list' show what type the text really holds.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Every field"
+              },
+              "version": 2,
+              "widgetType": "table"
+            }
+          }
+        }
+      ],
+      "name": "completeness",
+      "pageType": "PAGE_TYPE_CANVAS"
+    },
+    {
+      "displayName": "Size and outliers",
+      "layout": [
+        {
+          "position": {
+            "height": 2,
+            "width": 6,
+            "x": 0,
+            "y": 0
+          },
+          "widget": {
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Size and outliers\n",
+                "Beds and doctors are recorded for a minority of facilities, and the extremes are not believable. Use the buckets to see the typical range, the scatter to see whether the two agree, and the table at the bottom to see the exact records that break a sanity rule."
+              ]
+            },
+            "name": "txt019"
+          }
+        },
+        {
+          "position": {
+            "height": 7,
+            "width": 3,
+            "x": 0,
+            "y": 2
+          },
+          "widget": {
+            "name": "bar020",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_clean",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`beds_bucket`",
+                      "name": "beds_bucket"
+                    },
+                    {
+                      "expression": "COUNT(`*`)",
+                      "name": "count(*)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Beds",
+                  "fieldName": "beds_bucket",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "displayName": "Facilities",
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Bed count distribution"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 7,
+            "width": 3,
+            "x": 3,
+            "y": 2
+          },
+          "widget": {
+            "name": "bar021",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_clean",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`doctors_bucket`",
+                      "name": "doctors_bucket"
+                    },
+                    {
+                      "expression": "COUNT(`*`)",
+                      "name": "count(*)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Doctors",
+                  "fieldName": "doctors_bucket",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "displayName": "Facilities",
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "description": "A third of the records with a doctor count list exactly one doctor.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Doctor count distribution"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 9,
+            "width": 3,
+            "x": 0,
+            "y": 9
+          },
+          "widget": {
+            "name": "sct022",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_size",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "`doctors`",
+                      "name": "doctors"
+                    },
+                    {
+                      "expression": "`beds`",
+                      "name": "beds"
+                    },
+                    {
+                      "expression": "`facility_type`",
+                      "name": "facility_type"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "color": {
+                  "displayName": "facility type",
+                  "fieldName": "facility_type",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "x": {
+                  "displayName": "Doctors",
+                  "fieldName": "doctors",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Beds",
+                  "fieldName": "beds",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "description": "Facilities with 1 to 1,500 beds and 1 to 400 doctors. Points hugging either axis are records where the two numbers disagree.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Beds against doctors, typical range"
+              },
+              "version": 3,
+              "widgetType": "scatter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 4,
+            "width": 3,
+            "x": 3,
+            "y": 9
+          },
+          "widget": {
+            "name": "bar023",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_clean",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`facility_type`",
+                      "name": "facility_type"
+                    },
+                    {
+                      "expression": "MEDIAN(`beds`)",
+                      "name": "median(beds)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Median beds",
+                  "fieldName": "median(beds)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Facility type",
+                  "fieldName": "facility_type",
+                  "scale": {
+                    "sort": {
+                      "by": "x-reversed"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Median beds by facility type"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 5,
+            "width": 3,
+            "x": 3,
+            "y": 13
+          },
+          "widget": {
+            "name": "bar024",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_clean",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`facility_type`",
+                      "name": "facility_type"
+                    },
+                    {
+                      "expression": "MEDIAN(`doctors`)",
+                      "name": "median(doctors)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Median doctors",
+                  "fieldName": "median(doctors)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Facility type",
+                  "fieldName": "facility_type",
+                  "scale": {
+                    "sort": {
+                      "by": "x-reversed"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Median doctors by facility type"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 7,
+            "width": 6,
+            "x": 0,
+            "y": 18
+          },
+          "widget": {
+            "name": "bar025",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_suspects",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`reason`",
+                      "name": "reason"
+                    },
+                    {
+                      "expression": "COUNT(`*`)",
+                      "name": "count(*)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Records",
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Rule",
+                  "fieldName": "reason",
+                  "scale": {
+                    "sort": {
+                      "by": "x-reversed"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "description": "One record can break more than one rule.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Records that break a sanity rule"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 12,
+            "width": 6,
+            "x": 0,
+            "y": 25
+          },
+          "widget": {
+            "name": "tbl026",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_suspects",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "`reason`",
+                      "name": "reason"
+                    },
+                    {
+                      "expression": "`name`",
+                      "name": "name"
+                    },
+                    {
+                      "expression": "`city`",
+                      "name": "city"
+                    },
+                    {
+                      "expression": "`state`",
+                      "name": "state"
+                    },
+                    {
+                      "expression": "`facility_type`",
+                      "name": "facility_type"
+                    },
+                    {
+                      "expression": "`detail`",
+                      "name": "detail"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "columns": [
+                  {
+                    "displayName": "Rule broken",
+                    "fieldName": "reason"
+                  },
+                  {
+                    "displayName": "Facility",
+                    "fieldName": "name"
+                  },
+                  {
+                    "displayName": "City",
+                    "fieldName": "city"
+                  },
+                  {
+                    "displayName": "State as written",
+                    "fieldName": "state"
+                  },
+                  {
+                    "displayName": "Type",
+                    "fieldName": "facility_type"
+                  },
+                  {
+                    "displayName": "Value",
+                    "fieldName": "detail"
+                  }
+                ]
+              },
+              "frame": {
+                "description": "Sort or search by rule. 'Coordinates far from the stated state' means more than 4 degrees from that state's median location. 'Postcode belongs to a different state' uses the India Post PIN directory.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "The records behind each rule"
+              },
+              "version": 2,
+              "widgetType": "table"
+            }
+          }
+        }
+      ],
+      "name": "outliers",
+      "pageType": "PAGE_TYPE_CANVAS"
+    },
+    {
+      "displayName": "Record trust",
+      "layout": [
+        {
+          "position": {
+            "height": 3,
+            "width": 6,
+            "x": 0,
+            "y": 0
+          },
+          "widget": {
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Can you trust a record?\n",
+                "Each row was stitched together from several web sources. The more sources a row has, the more likely it mixes in claims from other facilities. This is the merged-record problem the challenge warns about. Source lists stop at 50 items, so 50 means \"50 or more\".\n",
+                "\n",
+                "When this was built, records with 1 to 5 sources claimed about 14 specialties on average, and records at the 50-source cap claimed about 49 out of a possible 50. A record that claims every specialty is telling you about its sources, not about the facility."
+              ]
+            },
+            "name": "txt027"
+          }
+        },
+        {
+          "position": {
+            "height": 7,
+            "width": 3,
+            "x": 0,
+            "y": 3
+          },
+          "widget": {
+            "name": "bar028",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_clean",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`source_bucket`",
+                      "name": "source_bucket"
+                    },
+                    {
+                      "expression": "COUNT(`*`)",
+                      "name": "count(*)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Number of sources",
+                  "fieldName": "source_bucket",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "displayName": "Facilities",
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "How many sources each record was built from"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 7,
+            "width": 3,
+            "x": 3,
+            "y": 3
+          },
+          "widget": {
+            "name": "bar029",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_clean",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`source_bucket`",
+                      "name": "source_bucket"
+                    },
+                    {
+                      "expression": "AVG(`n_specialties`)",
+                      "name": "avg(n_specialties)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Number of sources",
+                  "fieldName": "source_bucket",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "displayName": "Avg specialties",
+                  "fieldName": "avg(n_specialties)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "description": "If this climbs with the number of sources, heavily sourced records are claiming more than one facility plausibly offers.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Average specialties claimed, by number of sources"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 7,
+            "width": 3,
+            "x": 0,
+            "y": 10
+          },
+          "widget": {
+            "name": "bar030",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_clean",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`source_bucket`",
+                      "name": "source_bucket"
+                    },
+                    {
+                      "expression": "AVG(`n_procedures`)",
+                      "name": "avg(n_procedures)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Number of sources",
+                  "fieldName": "source_bucket",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "displayName": "Avg procedures",
+                  "fieldName": "avg(n_procedures)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Average procedures claimed, by number of sources"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 7,
+            "width": 3,
+            "x": 3,
+            "y": 10
+          },
+          "widget": {
+            "name": "bar031",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_clean",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`source_bucket`",
+                      "name": "source_bucket"
+                    },
+                    {
+                      "expression": "COUNT(`*`)",
+                      "name": "count(*)"
+                    },
+                    {
+                      "expression": "`facility_type`",
+                      "name": "facility_type"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "color": {
+                  "displayName": "facility type",
+                  "fieldName": "facility_type",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "x": {
+                  "displayName": "Number of sources",
+                  "fieldName": "source_bucket",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "displayName": "Facilities",
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Sources per record, by facility type"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 9,
+            "width": 3,
+            "x": 0,
+            "y": 17
+          },
+          "widget": {
+            "name": "sct032",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_clean",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "`source_count`",
+                      "name": "source_count"
+                    },
+                    {
+                      "expression": "`n_specialties`",
+                      "name": "n_specialties"
+                    },
+                    {
+                      "expression": "`facility_type`",
+                      "name": "facility_type"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "color": {
+                  "displayName": "facility type",
+                  "fieldName": "facility_type",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "x": {
+                  "displayName": "Number of sources",
+                  "fieldName": "source_count",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Specialties claimed",
+                  "fieldName": "n_specialties",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "description": "Each dot is a facility. Both lists stop at 50.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Specialties claimed against number of sources"
+              },
+              "version": 3,
+              "widgetType": "scatter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 9,
+            "width": 3,
+            "x": 3,
+            "y": 17
+          },
+          "widget": {
+            "name": "bar033",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_domains",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`domain`",
+                      "name": "domain"
+                    },
+                    {
+                      "expression": "SUM(`facilities`)",
+                      "name": "sum(facilities)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Facilities",
+                  "fieldName": "sum(facilities)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Website",
+                  "fieldName": "domain",
+                  "scale": {
+                    "sort": {
+                      "by": "x-reversed"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "description": "Number of facilities with at least one source URL on each site. Most evidence is from directories and social media, not the facility itself.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Websites the evidence comes from"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        }
+      ],
+      "name": "trust",
+      "pageType": "PAGE_TYPE_CANVAS"
+    },
+    {
+      "displayName": "Service claims",
+      "layout": [
+        {
+          "position": {
+            "height": 2,
+            "width": 6,
+            "x": 0,
+            "y": 0
+          },
+          "widget": {
+            "multilineTextboxSpec": {
+              "lines": [
+                "## What do facilities say they offer?\n",
+                "Counts of facilities whose text mentions each service. A mention is a claim, not proof. A service mentioned in three or more fields is better supported than one that appears once."
+              ]
+            },
+            "name": "txt034"
+          }
+        },
+        {
+          "position": {
+            "height": 8,
+            "width": 6,
+            "x": 0,
+            "y": 2
+          },
+          "widget": {
+            "name": "bar035",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kwstrength",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`keyword`",
+                      "name": "keyword"
+                    },
+                    {
+                      "expression": "SUM(`facilities`)",
+                      "name": "sum(facilities)"
+                    },
+                    {
+                      "expression": "`evidence`",
+                      "name": "evidence"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "color": {
+                  "displayName": "Mentioned in",
+                  "fieldName": "evidence",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "x": {
+                  "displayName": "Facilities",
+                  "fieldName": "sum(facilities)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Service",
+                  "fieldName": "keyword",
+                  "scale": {
+                    "sort": {
+                      "by": "x-reversed"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "description": "How many of the five text fields (specialties, procedure, equipment, capability, description) mention the service.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Service mentions by strength of evidence"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 8,
+            "width": 6,
+            "x": 0,
+            "y": 10
+          },
+          "widget": {
+            "name": "tbl036",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_keywords",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "`keyword`",
+                      "name": "keyword"
+                    },
+                    {
+                      "expression": "`any_field`",
+                      "name": "any_field"
+                    },
+                    {
+                      "expression": "`in_one_field_only`",
+                      "name": "in_one_field_only"
+                    },
+                    {
+                      "expression": "`in_three_or_more_fields`",
+                      "name": "in_three_or_more_fields"
+                    },
+                    {
+                      "expression": "`in_specialties`",
+                      "name": "in_specialties"
+                    },
+                    {
+                      "expression": "`in_procedure`",
+                      "name": "in_procedure"
+                    },
+                    {
+                      "expression": "`in_equipment`",
+                      "name": "in_equipment"
+                    },
+                    {
+                      "expression": "`in_capability`",
+                      "name": "in_capability"
+                    },
+                    {
+                      "expression": "`in_description`",
+                      "name": "in_description"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "columns": [
+                  {
+                    "displayName": "Service",
+                    "fieldName": "keyword"
+                  },
+                  {
+                    "displayName": "Any field",
+                    "fieldName": "any_field"
+                  },
+                  {
+                    "displayName": "One field only",
+                    "fieldName": "in_one_field_only"
+                  },
+                  {
+                    "displayName": "3+ fields",
+                    "fieldName": "in_three_or_more_fields"
+                  },
+                  {
+                    "displayName": "specialties",
+                    "fieldName": "in_specialties"
+                  },
+                  {
+                    "displayName": "procedure",
+                    "fieldName": "in_procedure"
+                  },
+                  {
+                    "displayName": "equipment",
+                    "fieldName": "in_equipment"
+                  },
+                  {
+                    "displayName": "capability",
+                    "fieldName": "in_capability"
+                  },
+                  {
+                    "displayName": "description",
+                    "fieldName": "in_description"
+                  }
+                ]
+              },
+              "frame": {
+                "description": "Searching one field misses facilities: MRI is mostly in equipment, C-section almost only in procedure.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Where each service is mentioned"
+              },
+              "version": 2,
+              "widgetType": "table"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 11,
+            "width": 6,
+            "x": 0,
+            "y": 18
+          },
+          "widget": {
+            "name": "heat037",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kwstate",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`keyword`",
+                      "name": "keyword"
+                    },
+                    {
+                      "expression": "`state`",
+                      "name": "state"
+                    },
+                    {
+                      "expression": "SUM(`pct_mentioning`)",
+                      "name": "sum(pct_mentioning)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "color": {
+                  "displayName": "% of facilities",
+                  "fieldName": "sum(pct_mentioning)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "x": {
+                  "displayName": "Service",
+                  "fieldName": "keyword",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "displayName": "State",
+                  "fieldName": "state",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "description": "States with at least 100 facilities. Light cells are states where few records claim the service.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Share of facilities mentioning each service, by state (%)"
+              },
+              "version": 3,
+              "widgetType": "heatmap"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 11,
+            "width": 2,
+            "x": 0,
+            "y": 29
+          },
+          "widget": {
+            "name": "bar038",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_specialties",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`specialty`",
+                      "name": "specialty"
+                    },
+                    {
+                      "expression": "SUM(`facilities`)",
+                      "name": "sum(facilities)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Facilities",
+                  "fieldName": "sum(facilities)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Specialty",
+                  "fieldName": "specialty",
+                  "scale": {
+                    "sort": {
+                      "by": "x-reversed"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Most common specialties"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 11,
+            "width": 2,
+            "x": 2,
+            "y": 29
+          },
+          "widget": {
+            "name": "bar039",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_procedures",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`item`",
+                      "name": "item"
+                    },
+                    {
+                      "expression": "SUM(`facilities`)",
+                      "name": "sum(facilities)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Facilities",
+                  "fieldName": "sum(facilities)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Procedure",
+                  "fieldName": "item",
+                  "scale": {
+                    "sort": {
+                      "by": "x-reversed"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Most common procedures"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 11,
+            "width": 2,
+            "x": 4,
+            "y": 29
+          },
+          "widget": {
+            "name": "bar040",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_equipment",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`item`",
+                      "name": "item"
+                    },
+                    {
+                      "expression": "SUM(`facilities`)",
+                      "name": "sum(facilities)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Facilities",
+                  "fieldName": "sum(facilities)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Equipment",
+                  "fieldName": "item",
+                  "scale": {
+                    "sort": {
+                      "by": "x-reversed"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Most common equipment"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 9,
+            "width": 6,
+            "x": 0,
+            "y": 40
+          },
+          "widget": {
+            "name": "tbl041",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_district",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "`district`",
+                      "name": "district"
+                    },
+                    {
+                      "expression": "`state`",
+                      "name": "state"
+                    },
+                    {
+                      "expression": "`facilities`",
+                      "name": "facilities"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "columns": [
+                  {
+                    "displayName": "District",
+                    "fieldName": "district"
+                  },
+                  {
+                    "displayName": "State",
+                    "fieldName": "state"
+                  },
+                  {
+                    "displayName": "Facilities",
+                    "fieldName": "facilities"
+                  }
+                ]
+              },
+              "frame": {
+                "description": "Matched by stripping non-digits from the postcode and joining to the India Post PIN directory.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Facilities by district"
+              },
+              "version": 2,
+              "widgetType": "table"
+            }
+          }
+        }
+      ],
+      "name": "services",
+      "pageType": "PAGE_TYPE_CANVAS"
+    },
+    {
+      "displayName": "Care levels",
+      "layout": [
+        {
+          "position": {
+            "height": 4,
+            "width": 6,
+            "x": 0,
+            "y": 0
+          },
+          "widget": {
+            "multilineTextboxSpec": {
+              "lines": [
+                "# Care levels\n",
+                "Every facility is placed on India's five-rung referral ladder: **1** sub-centre, **2** PHC or clinic, **3** CHC or nursing home, **4** district hospital or multispecialty hospital, **5** medical college or super-specialty hospital. Diagnostic centres and pharmacies get no rung.\n",
+                "\n",
+                "**How it is decided:** the name when it states a public tier (\"District Hospital\", \"PHC\", \"Medical College\"), otherwise beds plus the services the record lists (ICU, CT, dialysis, blood bank for rung 4; neurosurgery, cath lab, MRI, NICU, transplant, radiotherapy for rung 5). **Confidence** is high when the name, a teaching affiliation, or beds plus services agree; low when only the facility type is known. These are inferences from scraped claims, not official designations. Source: `workspace.vf_gold.facility_level`. Outside check: `workspace.vf_gold.facility_external_check` (OpenStreetMap, Oct 2026; government lists once uploaded via notebook 05)."
+              ]
+            },
+            "name": "lvtxt"
+          }
+        },
+        {
+          "position": {
+            "height": 2,
+            "width": 1,
+            "x": 0,
+            "y": 4
+          },
+          "widget": {
+            "name": "lvcnt0",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_lv_sum",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "SUM(`with_rung`)",
+                      "name": "sum(with_rung)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "value": {
+                  "displayName": "Facilities with a rung",
+                  "fieldName": "sum(with_rung)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Facilities with a rung"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 2,
+            "width": 1,
+            "x": 1,
+            "y": 4
+          },
+          "widget": {
+            "name": "lvcnt1",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_lv_sum",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "SUM(`high_conf`)",
+                      "name": "sum(high_conf)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "value": {
+                  "displayName": "High-confidence levels",
+                  "fieldName": "sum(high_conf)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "High-confidence levels"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 2,
+            "width": 1,
+            "x": 2,
+            "y": 4
+          },
+          "widget": {
+            "name": "lvcnt2",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_lv_sum",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "SUM(`rung5`)",
+                      "name": "sum(rung5)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "value": {
+                  "displayName": "Rung 5 (tertiary)",
+                  "fieldName": "sum(rung5)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Rung 5 (tertiary)"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 2,
+            "width": 1,
+            "x": 3,
+            "y": 4
+          },
+          "widget": {
+            "name": "lvcnt3",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_lv_sum",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "SUM(`nicu`)",
+                      "name": "sum(nicu)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "value": {
+                  "displayName": "List a NICU",
+                  "fieldName": "sum(nicu)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "List a NICU"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 2,
+            "width": 1,
+            "x": 4,
+            "y": 4
+          },
+          "widget": {
+            "name": "lvcnt4",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_lv_sum",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "SUM(`cemonc`)",
+                      "name": "sum(cemonc)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "value": {
+                  "displayName": "C-section + blood bank",
+                  "fieldName": "sum(cemonc)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "C-section + blood bank"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 2,
+            "width": 1,
+            "x": 5,
+            "y": 4
+          },
+          "widget": {
+            "name": "lvcnt5",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_lv_sum",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "SUM(`confirmed_outside`)",
+                      "name": "sum(confirmed_outside)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "value": {
+                  "displayName": "Confirmed by OpenStreetMap",
+                  "fieldName": "sum(confirmed_outside)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Confirmed by OpenStreetMap"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 1,
+            "width": 2,
+            "x": 0,
+            "y": 6
+          },
+          "widget": {
+            "name": "lvflt_state",
+            "queries": [
+              {
+                "name": "flt_state_q",
+                "query": {
+                  "datasetName": "ds_lv",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`state`",
+                      "name": "state"
+                    },
+                    {
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)",
+                      "name": "state_associativity"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "fields": [
+                  {
+                    "displayName": "State",
+                    "fieldName": "state",
+                    "queryName": "flt_state_q"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "State"
+              },
+              "version": 2,
+              "widgetType": "filter-multi-select"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 1,
+            "width": 2,
+            "x": 2,
+            "y": 6
+          },
+          "widget": {
+            "name": "lvflt_rung",
+            "queries": [
+              {
+                "name": "flt_rung_q",
+                "query": {
+                  "datasetName": "ds_lv",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`rung`",
+                      "name": "rung"
+                    },
+                    {
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)",
+                      "name": "rung_associativity"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "fields": [
+                  {
+                    "displayName": "Rung",
+                    "fieldName": "rung",
+                    "queryName": "flt_rung_q"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Rung"
+              },
+              "version": 2,
+              "widgetType": "filter-multi-select"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 1,
+            "width": 2,
+            "x": 4,
+            "y": 6
+          },
+          "widget": {
+            "name": "lvflt_conf",
+            "queries": [
+              {
+                "name": "flt_conf_q",
+                "query": {
+                  "datasetName": "ds_lv",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`level_confidence`",
+                      "name": "level_confidence"
+                    },
+                    {
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)",
+                      "name": "level_confidence_associativity"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "fields": [
+                  {
+                    "displayName": "Confidence",
+                    "fieldName": "level_confidence",
+                    "queryName": "flt_conf_q"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Confidence"
+              },
+              "version": 2,
+              "widgetType": "filter-multi-select"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 8,
+            "width": 3,
+            "x": 0,
+            "y": 8
+          },
+          "widget": {
+            "name": "lvbar_rung",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_lv",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`rung`",
+                      "name": "rung"
+                    },
+                    {
+                      "expression": "COUNT(`*`)",
+                      "name": "count(*)"
+                    },
+                    {
+                      "expression": "`level_confidence`",
+                      "name": "level_confidence"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "color": {
+                  "displayName": "Confidence",
+                  "fieldName": "level_confidence",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "x": {
+                  "displayName": "Rung",
+                  "fieldName": "rung",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "displayName": "Facilities",
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Facilities by rung and confidence"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 8,
+            "width": 3,
+            "x": 3,
+            "y": 8
+          },
+          "widget": {
+            "name": "lvbar_kind",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_lv",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`care_level_label`",
+                      "name": "care_level_label"
+                    },
+                    {
+                      "expression": "COUNT(`*`)",
+                      "name": "count(*)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Facilities",
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Level",
+                  "fieldName": "care_level_label",
+                  "scale": {
+                    "sort": {
+                      "by": "y"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "description": "Public names map to the government ladder; private facilities are sorted by what they can do.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Facilities by level and kind"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 11,
+            "width": 3,
+            "x": 0,
+            "y": 16
+          },
+          "widget": {
+            "name": "lvmap",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_lv",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "`longitude`",
+                      "name": "longitude"
+                    },
+                    {
+                      "expression": "`latitude`",
+                      "name": "latitude"
+                    },
+                    {
+                      "expression": "`rung`",
+                      "name": "rung"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "color": {
+                  "displayName": "Rung",
+                  "fieldName": "rung",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "x": {
+                  "displayName": "Longitude",
+                  "fieldName": "longitude",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Latitude",
+                  "fieldName": "latitude",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "description": "Each dot is a facility, coloured by rung.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Where each level sits"
+              },
+              "version": 3,
+              "widgetType": "scatter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 11,
+            "width": 3,
+            "x": 3,
+            "y": 16
+          },
+          "widget": {
+            "name": "lvbar_basis",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_lv",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`level_basis`",
+                      "name": "level_basis"
+                    },
+                    {
+                      "expression": "COUNT(`*`)",
+                      "name": "count(*)"
+                    },
+                    {
+                      "expression": "`level_confidence`",
+                      "name": "level_confidence"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "color": {
+                  "displayName": "Confidence",
+                  "fieldName": "level_confidence",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "x": {
+                  "displayName": "Facilities",
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Decided by",
+                  "fieldName": "level_basis",
+                  "scale": {
+                    "sort": {
+                      "by": "x-reversed"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "description": "Facility type only means no beds, name or service evidence: treat those levels as a guess.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "What each level is based on"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 11,
+            "width": 6,
+            "x": 0,
+            "y": 27
+          },
+          "widget": {
+            "name": "lvheat",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_lv_state",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`rung`",
+                      "name": "rung"
+                    },
+                    {
+                      "expression": "`state`",
+                      "name": "state"
+                    },
+                    {
+                      "expression": "SUM(`pct`)",
+                      "name": "sum(pct)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "color": {
+                  "displayName": "% of state's facilities",
+                  "fieldName": "sum(pct)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "x": {
+                  "displayName": "Rung",
+                  "fieldName": "rung",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "displayName": "State",
+                  "fieldName": "state",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "description": "States with at least 100 facilities.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Level mix by state (% of each state's facilities)"
+              },
+              "version": 3,
+              "widgetType": "heatmap"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 7,
+            "width": 3,
+            "x": 0,
+            "y": 38
+          },
+          "widget": {
+            "name": "lvsvc0",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_lv",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`newborn_level`",
+                      "name": "newborn_level"
+                    },
+                    {
+                      "expression": "COUNT(`*`)",
+                      "name": "count(*)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Facilities",
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Newborn care level",
+                  "fieldName": "newborn_level",
+                  "scale": {
+                    "sort": {
+                      "by": "x-reversed"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Newborn care level"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 7,
+            "width": 3,
+            "x": 3,
+            "y": 38
+          },
+          "widget": {
+            "name": "lvsvc1",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_lv",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`obstetric_level`",
+                      "name": "obstetric_level"
+                    },
+                    {
+                      "expression": "COUNT(`*`)",
+                      "name": "count(*)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Facilities",
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Obstetric emergency level",
+                  "fieldName": "obstetric_level",
+                  "scale": {
+                    "sort": {
+                      "by": "x-reversed"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Obstetric emergency level"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 7,
+            "width": 3,
+            "x": 0,
+            "y": 45
+          },
+          "widget": {
+            "name": "lvsvc2",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_lv",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`trauma_level`",
+                      "name": "trauma_level"
+                    },
+                    {
+                      "expression": "COUNT(`*`)",
+                      "name": "count(*)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Facilities",
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Trauma level",
+                  "fieldName": "trauma_level",
+                  "scale": {
+                    "sort": {
+                      "by": "x-reversed"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Trauma level"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 7,
+            "width": 3,
+            "x": 3,
+            "y": 45
+          },
+          "widget": {
+            "name": "lvsvc3",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_lv",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`dialysis_level`",
+                      "name": "dialysis_level"
+                    },
+                    {
+                      "expression": "COUNT(`*`)",
+                      "name": "count(*)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": true
+                },
+                "x": {
+                  "displayName": "Facilities",
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Dialysis",
+                  "fieldName": "dialysis_level",
+                  "scale": {
+                    "sort": {
+                      "by": "x-reversed"
+                    },
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Dialysis"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 14,
+            "width": 6,
+            "x": 0,
+            "y": 59
+          },
+          "widget": {
+            "name": "lvtbl",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_lv",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "`name`",
+                      "name": "name"
+                    },
+                    {
+                      "expression": "`city`",
+                      "name": "city"
+                    },
+                    {
+                      "expression": "`district`",
+                      "name": "district"
+                    },
+                    {
+                      "expression": "`state`",
+                      "name": "state"
+                    },
+                    {
+                      "expression": "`care_level_label`",
+                      "name": "care_level_label"
+                    },
+                    {
+                      "expression": "`level_confidence`",
+                      "name": "level_confidence"
+                    },
+                    {
+                      "expression": "`outside_check`",
+                      "name": "outside_check"
+                    },
+                    {
+                      "expression": "`level_reason`",
+                      "name": "level_reason"
+                    },
+                    {
+                      "expression": "`outside_evidence`",
+                      "name": "outside_evidence"
+                    },
+                    {
+                      "expression": "`newborn_level`",
+                      "name": "newborn_level"
+                    },
+                    {
+                      "expression": "`obstetric_level`",
+                      "name": "obstetric_level"
+                    },
+                    {
+                      "expression": "`trauma_level`",
+                      "name": "trauma_level"
+                    },
+                    {
+                      "expression": "`dialysis_level`",
+                      "name": "dialysis_level"
+                    },
+                    {
+                      "expression": "`nabh_claimed`",
+                      "name": "nabh_claimed"
+                    },
+                    {
+                      "expression": "`pmjay_claimed`",
+                      "name": "pmjay_claimed"
+                    },
+                    {
+                      "expression": "`quality_score`",
+                      "name": "quality_score"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "columns": [
+                  {
+                    "displayName": "Facility",
+                    "fieldName": "name"
+                  },
+                  {
+                    "displayName": "City",
+                    "fieldName": "city"
+                  },
+                  {
+                    "displayName": "District",
+                    "fieldName": "district"
+                  },
+                  {
+                    "displayName": "State",
+                    "fieldName": "state"
+                  },
+                  {
+                    "displayName": "Level",
+                    "fieldName": "care_level_label"
+                  },
+                  {
+                    "displayName": "Confidence",
+                    "fieldName": "level_confidence"
+                  },
+                  {
+                    "displayName": "Outside check",
+                    "fieldName": "outside_check"
+                  },
+                  {
+                    "displayName": "Why",
+                    "fieldName": "level_reason"
+                  },
+                  {
+                    "displayName": "Outside record",
+                    "fieldName": "outside_evidence"
+                  },
+                  {
+                    "displayName": "Newborn",
+                    "fieldName": "newborn_level"
+                  },
+                  {
+                    "displayName": "Obstetric",
+                    "fieldName": "obstetric_level"
+                  },
+                  {
+                    "displayName": "Trauma",
+                    "fieldName": "trauma_level"
+                  },
+                  {
+                    "displayName": "Dialysis",
+                    "fieldName": "dialysis_level"
+                  },
+                  {
+                    "displayName": "NABH (claimed)",
+                    "fieldName": "nabh_claimed"
+                  },
+                  {
+                    "displayName": "PM-JAY (claimed)",
+                    "fieldName": "pmjay_claimed"
+                  },
+                  {
+                    "displayName": "Record quality",
+                    "fieldName": "quality_score"
+                  }
+                ]
+              },
+              "frame": {
+                "description": "Use the filters above to narrow by state, rung, confidence or outside check. Outside check compares our level with the nearest same-named OpenStreetMap record (government lists join automatically once uploaded). NABH and PM-JAY are the facility's own claims.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Look up a facility"
+              },
+              "version": 2,
+              "widgetType": "table"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 7,
+            "width": 6,
+            "x": 0,
+            "y": 52
+          },
+          "widget": {
+            "name": "lvbar_ext",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_lv",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`rung`",
+                      "name": "rung"
+                    },
+                    {
+                      "expression": "COUNT(`*`)",
+                      "name": "count(*)"
+                    },
+                    {
+                      "expression": "`outside_check`",
+                      "name": "outside_check"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "color": {
+                  "displayName": "Outside check",
+                  "fieldName": "outside_check",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "x": {
+                  "displayName": "Rung",
+                  "fieldName": "rung",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "displayName": "Facilities",
+                  "fieldName": "count(*)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "description": "Matched by name within 2 km. Confirms: same public tier in the name, or a hospital for rung 3 to 5 and a clinic for rung 1 to 2. Type differs: worth a look, OSM often tags small clinics as hospitals.",
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Does an outside record agree with our level?"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 1,
+            "width": 2,
+            "x": 0,
+            "y": 7
+          },
+          "widget": {
+            "name": "lvflt_ext",
+            "queries": [
+              {
+                "name": "flt_ext_q",
+                "query": {
+                  "datasetName": "ds_lv",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`outside_check`",
+                      "name": "outside_check"
+                    },
+                    {
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)",
+                      "name": "outside_check_associativity"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "fields": [
+                  {
+                    "displayName": "Outside check",
+                    "fieldName": "outside_check",
+                    "queryName": "flt_ext_q"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Outside check"
+              },
+              "version": 2,
+              "widgetType": "filter-multi-select"
+            }
+          }
+        }
+      ],
+      "name": "levels",
+      "pageType": "PAGE_TYPE_CANVAS"
+    }
+  ],
+  "uiSettings": {
+    "applyModeEnabled": false,
+    "theme": {
+      "widgetHeaderAlignment": "ALIGNMENT_UNSPECIFIED"
+    }
+  }
+}
