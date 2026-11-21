@@ -41,6 +41,7 @@ Every cleaning decision below follows from those three requirements:
 | 04 | Gold Care Levels | SQL | `vf_silver` | `vf_gold.facility_level*` | ~40 s |
 | 05 | External Gov Upload | Python | files in the `vf_bronze.external` volume | `vf_bronze.ext_*_raw`, `vf_silver.external_facilities_gov` | ~1 min, only when gov files exist |
 | 06 | External Checks | SQL | OSM file + `vf_silver` + `vf_gold.facility_level` | `vf_silver.external_facilities`, `vf_gold.facility_external_*` | ~1 min |
+| 09 | Gold Facility Service | Python (SQL inside) | `vf_silver.facilities`, `facility_claims`, `vf_gold.facility_level`, `facility_external_*`, and notebook 07 / 10 tables if they exist | `vf_gold.facility_service`, `facility_verification`, `facility_service_rules`, `facility_service_checks` | ~2.5 min |
 
 Every notebook is **safe to rerun** (`CREATE OR REPLACE`). After changing an earlier layer, rerun everything after it in order.
 
@@ -337,7 +338,7 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 - 75% of facilities have no bed count, and 64% have no doctor count. Most clinics therefore have low confidence.
 - OpenStreetMap confirms only about a quarter of facilities. Government lists should raise this, especially for public rungs.
 - NABH and PM-JAY are self-claims until checked against official lists.
-- Not built yet: the service search table (`facility_service`, with ranking by service, location and confidence) and `district_context` (NFHS need next to facility supply).
+- Not built yet: ranking on top of `facility_service`, and `district_context` (NFHS need next to facility supply).
 
 ---
 
@@ -352,6 +353,102 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-21 | OpenStreetMap (HOT, Oct 2026) loaded and matched (06); location words removed from name matching after false matches |
 | 2026-11-21 | Government upload path built and tested (05); volume `vf_bronze.external` created |
 | 2026-11-21 | Databricks folder renamed to "CMU Datathon 2026" by the team |
+| 2026-11-21 | Chunk C: `facility_service` and `facility_verification` built and tested (09), 14 of 14 checks passing. See section 12 |
+
+## 12. Implemented: service search tables (chunk C, notebook 09)
+
+Built and run in Databricks on 2026-11-21 (job run succeeded, 14 of 14 checks pass). Only what is listed here exists.
+
+### 12.1 What was built
+
+| Table | Rows | What it is |
+| --- | --- | --- |
+| `vf_gold.facility_service_rules` | 24 | Editable keyword rules for 14 services, split into `direct` wording (states the service) and `indirect` wording (only hints at it) |
+| `vf_gold.facility_service` | 139,846 (9,989 facilities x 14 services) | One row per facility and service. The table the ranking, map and explanation cards should read |
+| `vf_gold.facility_verification` | 147,320 | One row per facility, service and outside source. `is_primary` marks the one row per facility and service that `facility_service` shows |
+| `vf_gold.facility_service_checks` | 14 | Pass/fail tests |
+
+Services: emergency, trauma, obstetric_delivery, c_section, nicu, dialysis, icu, ct, mri, cardiac_cath, stroke, blood_bank, burns, paediatrics.
+
+Nothing from notebooks 01 to 06 was changed. `facility_service_rules` and `facility_service_checks` are two small helper tables that were not in the brief; they sit in the same namespace so they cannot collide with other chunks.
+
+### 12.2 How a claim is detected, and why
+
+Text read: the four list fields in `facility_claims`, every sentence of the description, and the facility name.
+
+| Decision | Reason |
+| --- | --- |
+| Separate `direct` and `indirect` wording | "Dialysis unit" states a service. The specialty tag "pediatrics" or the word "trauma" in "orthopaedics and trauma" only hints at one. Indirect hits are kept but always marked weak |
+| Negating text is never a claim | The data contains lines like "No MRI facility on site", "CT scan services outsourced", "Does not provide emergency services". Plain keyword matching would count these as claims. They are kept in `negating_quote` and lower the strength when a record says both |
+| `claim_strength` instead of one yes/no | strong = direct wording in 2+ different fields; moderate = direct wording in one field; weak = specialty tag or indirect wording only. Drops one step when the record's quality score is under 0.7 or it also has negating text |
+| `supporting_quote`, `supporting_signal`, `source_field`, `all_quotes` on every claim | Every claim can be shown with the exact words it rests on. `all_quotes` keeps up to five |
+| `hours_claim` only from explicit text | `24x7` only when a sentence that directly states the service also says 24x7, 24 hours or round the clock. That sentence is kept in `hours_quote` |
+| `availability_status` is always `unknown` | No source tells us whether a bed, machine or doctor is available now |
+| `plausibility_flag` | Marks claims that are unusual for the facility type (for example a small clinic listing an ICU) and records with 30+ specialties for one doctor. Flag only; the row is kept |
+| `location_quality_flag` | Uses `vf_silver.facility_geo_quality` when notebook 07 has built it. It did not exist at build time, so the flag currently comes from the silver flags: 9,731 good, 222 suspect, 36 missing. `duplicate_group_id` is null for the same reason |
+| `contact_verification_status` | `listed_unverified` or `missing`. No phone number has been checked against anything |
+
+Rules tightened after reading samples: neonatal and paediatric ICU no longer count as adult ICU; dental cone-beam CT, PET-CT, CT simulators and "CT University" no longer count as CT; "Straumann" no longer matches trauma; "instrument delivery system" no longer matches childbirth; thrombectomy counts as stroke care only when stroke is named.
+
+### 12.3 Verification layer
+
+Ladder: claimed in the facility's own text -> `inferred` -> `externally_supported` -> `verified` -> currently available (always unknown).
+
+| Status | Meaning | What can grant it today |
+| --- | --- | --- |
+| `unknown` | No claim and no outside source | default |
+| `inferred` | Claimed in the facility's own text only | notebook 09 step 1 |
+| `externally_supported` | An outside record independently lists that speciality | OpenStreetMap speciality text |
+| `verified` | A source that establishes that one specific thing | nothing loaded yet |
+| `contradicted` | An outside source disagrees | type or tier mismatch from notebook 06 |
+
+- An OpenStreetMap or directory match supports that the facility **exists** (`_facility_existence`) and its **type** (`_facility_type`). It never raises the status of a service. A test enforces this.
+- `verified` is reserved for four cases, each only for the thing named: eRaktKosh -> `blood_bank`; official CGHS list -> `_cghs_empanelment`; official PM-JAY list -> `_pmjay_empanelment`; NABH directory -> `_nabh_accreditation`. None of those sources is loaded yet, so there are 0 verified rows.
+- `matched_at` is the time the row was computed. `source_date` and `verification_date` stay null unless the source itself gives a date. Both are null everywhere today.
+- Self-claimed badges are recorded as `inferred`: NABH 1,301, PM-JAY 646, CGHS 181.
+
+**Rerun after notebook 10:** rerun notebook 09. It checks whether `vf_silver.ext_facility_matches` exists and, if so, reads it (matches whose method contains "ambig" are skipped). The source name decides what a match can establish. This path was dry-run with made-up matches and gave the expected statuses, but has not run on real notebook 10 output, because that table did not exist yet.
+
+### 12.4 Measured results
+
+26,405 claims across 7,747 facilities (2,242 facilities have no claim for any of the 14 services).
+
+| Service | Claimed | Strong | Moderate | Weak | Only negating text | Says 24x7 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| paediatrics | 5,460 | 482 | 1,030 | 3,948 | 0 | 77 |
+| obstetric_delivery | 4,732 | 514 | 803 | 3,415 | 0 | 41 |
+| emergency | 3,910 | 694 | 2,215 | 1,001 | 3 | 2,269 |
+| icu | 2,922 | 936 | 1,365 | 621 | 0 | 292 |
+| trauma | 1,815 | 393 | 737 | 685 | 1 | 264 |
+| nicu | 1,605 | 251 | 457 | 897 | 0 | 55 |
+| ct | 1,441 | 809 | 611 | 21 | 4 | 70 |
+| dialysis | 1,055 | 565 | 476 | 14 | 1 | 95 |
+| mri | 946 | 525 | 404 | 17 | 4 | 25 |
+| cardiac_cath | 822 | 382 | 325 | 115 | 0 | 30 |
+| blood_bank | 642 | 209 | 352 | 81 | 4 | 71 |
+| c_section | 442 | 93 | 340 | 9 | 1 | 4 |
+| stroke | 330 | 32 | 90 | 208 | 1 | 5 |
+| burns | 283 | 46 | 116 | 121 | 2 | 6 |
+
+- **Claim strength:** 22.5% strong, 35.3% moderate, 42.2% weak. The weak share is highest for paediatrics, childbirth, stroke and NICU, where most hits are a specialty tag.
+- **Verification status of the 26,405 claims:** 26,389 inferred (99.94%), 16 externally supported (0.06%), 0 verified. In other words almost every service claim rests only on the facility's own text.
+- **Facility seen in an outside source:** 10,441 of the claims (39.5%) belong to a facility matched in OpenStreetMap. That supports the facility, not the service.
+- **Type contradictions:** 134 facilities have an outside type that conflicts with ours.
+- 32 claims also have negating text on the same record; 21 facility-service pairs have only negating text and are not counted as claims.
+
+### 12.5 Tests (`vf_gold.facility_service_checks`, 14 of 14 pass)
+
+One row per facility x service; every silver facility present; no claim without a quote and matched rule; no quote without a claim; negated-only text is never a claim; no `verified` from a map or generic directory; `verified` only for the one thing a source establishes; every outside status has a source and record id; no import time used as a verification date; exactly one primary verification row per pair; `facility_service` status equals the primary row; availability always unknown; `24x7` only with a claim; inferred means a claim and unknown means none.
+
+### 12.6 Hand check and known limits
+
+- I read two random samples of strong and moderate claims, 3 per service. First sample: 38 of 42 quotes really stated the service. The 4 misses became the rule fixes above. Fresh sample after the fixes: 40 of 42 (misses: "paediatric critical care" counted as adult ICU, and eye trauma counted as trauma care). This is one reader and 84 rows, so treat it as a rough indication, not an accuracy figure.
+- Weak claims were not hand-checked and include loose hits such as "reachable in times of emergency".
+- Keyword rules cannot tell scope. "Orthopaedic emergency services 24/7" counts as an emergency claim.
+- `service_specific_level` is copied from `facility_level` (newborn, obstetric, trauma, dialysis). Those levels in notebook 04 do not yet ignore negating text.
+- `care_level` comes from `vf_gold.facility_level`, not from notebook 07's corrected version.
+
+---
 
 ## Sources
 
