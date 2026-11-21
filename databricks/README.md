@@ -41,7 +41,8 @@ Every cleaning decision below follows from those three requirements:
 | 04 | Gold Care Levels | SQL | `vf_silver` | `vf_gold.facility_level*` | ~40 s |
 | 05 | External Gov Upload | Python | files in the `vf_bronze.external` volume | `vf_bronze.ext_*_raw`, `vf_silver.external_facilities_gov` | ~1 min, only when gov files exist |
 | 06 | External Checks | SQL | OSM file + `vf_silver` + `vf_gold.facility_level` | `vf_silver.external_facilities`, `vf_gold.facility_external_*` | ~1 min |
-| 09 | Gold Facility Service | Python (SQL inside) | `vf_silver.facilities`, `facility_claims`, `vf_gold.facility_level`, `facility_external_*`, and notebook 07 / 10 tables if they exist | `vf_gold.facility_service`, `facility_verification`, `facility_service_rules`, `facility_service_checks` | ~2.5 min |
+| 07 | Gold Fixes and Tests | Python (SQL inside) | `vf_silver.facilities`, `vf_gold.facility_level`, `facility_level_evidence`, `facility_external_check`, `facility_service` if present | `vf_gold.facility_level_v2`, `vf_gold.quality_tests`, `vf_silver.facility_geo_quality`, `vf_silver.facility_duplicate_groups`, `vf_silver.facility_duplicate_pairs` | ~2 min |
+| 09 | Gold Facility Service | Python (SQL inside) | `vf_silver.facilities`, `facility_claims`, `vf_gold.facility_level`, `facility_external_*`, and notebook 07 / 10 tables if they exist (run 07 first) | `vf_gold.facility_service`, `facility_verification`, `facility_service_rules`, `facility_service_checks` | ~2.5 min |
 
 Every notebook is **safe to rerun** (`CREATE OR REPLACE`). After changing an earlier layer, rerun everything after it in order.
 
@@ -354,6 +355,7 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-21 | Government upload path built and tested (05); volume `vf_bronze.external` created |
 | 2026-11-21 | Databricks folder renamed to "CMU Datathon 2026" by the team |
 | 2026-11-21 | Chunk C: `facility_service` and `facility_verification` built and tested (09), 14 of 14 checks passing. See section 12 |
+| 2026-11-21 | Chunk A: `facility_level_v2`, `quality_tests`, `facility_geo_quality`, `facility_duplicate_groups` built (07). Notebook 09 rerun to read them. See section 13 |
 
 ## 12. Implemented: service search tables (chunk C, notebook 09)
 
@@ -385,7 +387,7 @@ Text read: the four list fields in `facility_claims`, every sentence of the desc
 | `hours_claim` only from explicit text | `24x7` only when a sentence that directly states the service also says 24x7, 24 hours or round the clock. That sentence is kept in `hours_quote` |
 | `availability_status` is always `unknown` | No source tells us whether a bed, machine or doctor is available now |
 | `plausibility_flag` | Marks claims that are unusual for the facility type (for example a small clinic listing an ICU) and records with 30+ specialties for one doctor. Flag only; the row is kept |
-| `location_quality_flag` | Uses `vf_silver.facility_geo_quality` when notebook 07 has built it. It did not exist at build time, so the flag currently comes from the silver flags: 9,731 good, 222 suspect, 36 missing. `duplicate_group_id` is null for the same reason |
+| `location_quality_flag` | Comes from `vf_silver.facility_geo_quality` (notebook 07) since the rerun on 2026-11-21: 9,624 good, 329 suspect, 36 invalid. `duplicate_group_id` and `duplicate_confidence` are filled for the 121 records notebook 07 flags. If the notebook 07 tables are missing, notebook 09 falls back to the silver flags and leaves the duplicate columns empty |
 | `contact_verification_status` | `listed_unverified` or `missing`. No phone number has been checked against anything |
 
 Rules tightened after reading samples: neonatal and paediatric ICU no longer count as adult ICU; dental cone-beam CT, PET-CT, CT simulators and "CT University" no longer count as CT; "Straumann" no longer matches trauma; "instrument delivery system" no longer matches childbirth; thrombectomy counts as stroke care only when stroke is named.
@@ -446,7 +448,72 @@ One row per facility x service; every silver facility present; no claim without 
 - Weak claims were not hand-checked and include loose hits such as "reachable in times of emergency".
 - Keyword rules cannot tell scope. "Orthopaedic emergency services 24/7" counts as an emergency claim.
 - `service_specific_level` is copied from `facility_level` (newborn, obstetric, trauma, dialysis). Those levels in notebook 04 do not yet ignore negating text.
-- `care_level` comes from `vf_gold.facility_level`, not from notebook 07's corrected version.
+- `care_level` comes from `vf_gold.facility_level_v2` (notebook 07) since the rerun; the column `care_level_source` says which table was used.
+
+---
+
+## 13. Implemented: fixes and quality flags (chunk A, notebook 07)
+
+Built and run in Databricks on 2026-11-21 (job run succeeded). Notebook 09 was rerun afterwards and still passes 14 of 14. Nothing from notebooks 01 to 06 was edited, and no row was merged or deleted.
+
+### 13.1 Why a diagnostic centre had care level 5
+
+*Anderson Diagnostics & Labs* has an academic affiliation. In notebook 04 the rule "academic affiliation -> rung 5" is tested before the rule "pharmacy or standalone diagnostic centre -> no rung", so it took rung 5 and kept the label "Diagnostic centre". It was the only such record.
+
+The same branch has two related gaps in the single-specialty guard from section 6 ("capped at rung 3 unless 100+ beds"):
+- the academic rule also runs before that guard, so dental colleges and eye institutes with a teaching link took rung 5;
+- the guard's pattern in notebook 04 has unescaped word boundaries, so the words eye, skin, IVF, ENT and hair never matched.
+
+### 13.2 `vf_gold.facility_level_v2`
+
+Same columns as `facility_level`, plus `care_level_v1`, `level_kind_v1`, `v2_change` (`rung` or `kind only`) and `v2_change_reason`. The original table is unchanged, so the dashboard still shows v1.
+
+| Change | Facilities |
+| --- | ---: |
+| Rung 5 -> 3: single-specialty teaching hospital, under 100 beds or beds unknown | 39 |
+| Rung 4 -> 3: single-specialty hospital under 100 beds that the broken pattern missed | 19 |
+| Rung 5 -> 4: single-specialty teaching hospital with 100+ beds, now placed by beds and services | 7 |
+| Rung 5 -> none: the diagnostic centre | 1 |
+| **Rung changed** | **66** |
+| Label only (now "Single-specialty hospital", rung unchanged) | 388 |
+
+Rung counts, v1 -> v2: rung 5 1,018 -> 971; rung 4 1,686 -> 1,674; rung 3 3,124 -> 3,182; no rung 519 -> 520; rungs 1 and 2 unchanged. The full list is the second output of notebook 07, or `SELECT * FROM vf_gold.facility_level_v2 WHERE v2_change = 'rung'`.
+
+These are rule corrections, not checked facts. A dental college with many chairs or a large eye institute may deserve a higher rung for its own specialty; for general and emergency routing the lower rung is the safer reading.
+
+### 13.3 `vf_silver.facility_geo_quality` (one row per facility)
+
+| Flag | Facilities | When |
+| --- | ---: | --- |
+| good | 9,624 | no known problem (not the same as checked on a map) |
+| suspect | 329 | coordinates in a different state than the address (220), stated state disagrees with the PIN code state (61), far from any known PIN code (2), or the exact same point as an unrelated record (69). A record can have more than one |
+| invalid | 36 | no usable coordinates |
+
+Every non-good row has a plain-language `reason`.
+
+### 13.4 `vf_silver.facility_duplicate_groups` (flag only)
+
+Two records are linked when their names overlap and something else agrees. Phones and website domains shared by more than 5 records (call centres, chains, listing sites) are ignored.
+
+| Confidence | Link | Facilities | Groups |
+| --- | --- | ---: | ---: |
+| high | same phone or same website, names alike, within 1 km | 22 | 11 |
+| medium | within 100 m, names alike | 8 | 4 |
+| low | same phone or website, names alike, more than 1 km apart (usually branches of one group) | 91 | 41 |
+
+121 records in 56 groups, from 73 links kept in `vf_silver.facility_duplicate_pairs`. The low number is expected: silver already merged exact duplicate ids. Only the 15 high and medium groups are likely the same place; treat low as "same organisation".
+
+### 13.5 `vf_gold.quality_tests` (19 tests, 18 pass)
+
+The one failing test is deliberate: "no standalone diagnostic centre or pharmacy with a rung (original table)" fails with 1 row on `facility_level` and passes on `facility_level_v2`. It stays in the table as the record of the known issue.
+
+The rest cover: one row per facility in both level tables; the single-specialty guard; every v2 change has a reason; rung is 1 to 5 or empty; no blank evidence quote; one evidence row per facility and signal; the outside check did not duplicate facilities; geo and duplicate tables are well formed; flagging removed no facility; `facility_service` has one row per facility and service and always carries a location flag; no verification date without a dated source; no stray verification-date column; no ingest timestamp exposed in gold.
+
+### 13.6 Limits
+
+- Consumers have to choose v2. The dashboard, `facility_external_check` (notebook 06) and the service-specific levels still come from v1.
+- Name overlap uses whole words, so spelling variants ("Sri" / "Shri") can hide a duplicate.
+- I read about 24 duplicate links by eye. The high ones looked right; no accuracy figure is claimed.
 
 ---
 
