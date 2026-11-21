@@ -1,0 +1,51 @@
+name: Sync Databricks backup
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '2-57/5 * * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: databricks-workspace-backup
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    if: ${{ github.ref_name == github.event.repository.default_branch && (github.event_name == 'workflow_dispatch' || vars.DATABRICKS_SYNC_ENABLED == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out private backup repository
+        uses: actions/checkout@v6
+      - name: Export Databricks objects to staging
+        env:
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          snapshot="$(mktemp -d "$RUNNER_TEMP/databricks-export.XXXXXX")"
+          python3 scripts/sync_databricks.py "$snapshot"
+          printf 'DATABRICKS_SNAPSHOT=%s\n' "$snapshot" >> "$GITHUB_ENV"
+      - name: Commit changed snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -L databricks ]]; then
+            echo "Refusing to mirror into a symbolic link."
+            exit 1
+          fi
+          mkdir -p databricks
+          rsync -r --delete -- "$DATABRICKS_SNAPSHOT/" databricks/
+          git add -A -- databricks/
+          if git diff --cached --quiet; then
+            echo "No Databricks content changed." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit --quiet -m 'Sync Databricks workspace snapshot'
+          git push origin "HEAD:refs/heads/$GITHUB_REF_NAME"
+          printf 'Pushed Databricks snapshot commit %s\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
