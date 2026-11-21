@@ -14,6 +14,7 @@
 -- MAGIC `6f60099df916151be1d39292556b3ed12cb488ef` (2026-11-21).
 
 -- COMMAND ----------
+
 -- MAGIC %md
 -- MAGIC ## 1. Safeguards and evidence extraction
 -- MAGIC Only descriptive prose and explicit free-text capability/procedure/equipment items
@@ -22,6 +23,7 @@
 -- MAGIC columns and web domains do not become capacity claims.
 
 -- COMMAND ----------
+
 CREATE TABLE IF NOT EXISTS workspace.vf_silver.facility_extracted_attributes (
   facility_id STRING,
   attribute STRING,
@@ -40,6 +42,7 @@ CREATE TABLE IF NOT EXISTS workspace.vf_silver.facility_extracted_attributes (
 COMMENT 'Strict quoted regex evidence from facility-associated text; conflict and ambiguity are retained; no overwrite of original facility attributes';
 
 -- COMMAND ----------
+
 -- Extract full literal numeric phrase (quote) then evaluate nearby context.
 -- Regexp_extract_all (Databricks SQL / Spark SQL) uses Java regex syntax.
 -- Regexes avoid numeric ranges beginning with "10-20" or "10 to 20" via
@@ -169,6 +172,7 @@ SELECT facility_id, attribute, value, quote, source_field, method, confidence,
 FROM results WHERE rn=1;
 
 -- COMMAND ----------
+
 -- MAGIC %md
 -- MAGIC ## 2. Web identity
 -- MAGIC `official_domain` comes only from the stated official website, and from a
@@ -178,6 +182,7 @@ FROM results WHERE rn=1;
 -- MAGIC otherwise left NULL. Domain recognition does not verify service capabilities.
 
 -- COMMAND ----------
+
 CREATE TABLE IF NOT EXISTS workspace.vf_silver.facility_web_identity (
  facility_id STRING,
  official_domain STRING,
@@ -191,6 +196,7 @@ CREATE TABLE IF NOT EXISTS workspace.vf_silver.facility_web_identity (
 COMMENT 'Official domains from stated officialWebsite only; chain affiliation candidate, never inherited care capability';
 
 -- COMMAND ----------
+
 INSERT OVERWRITE workspace.vf_silver.facility_web_identity
 WITH normalized AS (
  SELECT facility_id, official_website, source_urls,
@@ -228,18 +234,21 @@ SELECT facility_id, official_domain, chain_name,
 FROM chains;
 
 -- COMMAND ----------
+
 -- MAGIC %md
 -- MAGIC ## 3. Measured validation
 -- MAGIC Run these read-only queries after population. They intentionally distinguish
 -- MAGIC candidate fills from source-verified facts and retain conflicts for review.
 
 -- COMMAND ----------
+
 SELECT attribute, review_status, count(*) AS rows,
        count(DISTINCT facility_id) AS distinct_facilities
 FROM workspace.vf_silver.facility_extracted_attributes
 GROUP BY attribute, review_status ORDER BY attribute, review_status;
 
 -- COMMAND ----------
+
 SELECT attribute,
        count(DISTINCT CASE WHEN review_status='candidate_fill' THEN facility_id END) AS new_candidate_fills,
        count(DISTINCT CASE WHEN review_status='conflict' THEN facility_id END) AS conflicts,
@@ -248,6 +257,7 @@ FROM workspace.vf_silver.facility_extracted_attributes
 GROUP BY attribute ORDER BY attribute;
 
 -- COMMAND ----------
+
 SELECT count(*) AS identity_rows,
        count(DISTINCT facility_id) AS distinct_facilities,
        count_if(official_domain IS NOT NULL) AS with_official_domain,
@@ -255,6 +265,7 @@ SELECT count(*) AS identity_rows,
 FROM workspace.vf_silver.facility_web_identity;
 
 -- COMMAND ----------
+
 -- 20 reproducible random quoted examples for manual review.
 SELECT facility_id, attribute, value, candidate_value, original_value,
        quote, source_field, confidence, review_status, rejection_reason
@@ -262,6 +273,7 @@ FROM workspace.vf_silver.facility_extracted_attributes
 ORDER BY rand(2026) LIMIT 20;
 
 -- COMMAND ----------
+
 -- Check quote is an exact substring of the indicated original source field.
 WITH sources AS (
  SELECT facility_id, 'description' AS source_field, description AS raw_text
@@ -282,6 +294,7 @@ LEFT JOIN sources s USING (facility_id,source_field)
 WHERE s.raw_text IS NULL OR instr(s.raw_text,a.quote)=0;
 
 -- COMMAND ----------
+
 -- No contradictory original attributes were overwritten (read-only comparison).
 SELECT a.attribute, count(*) AS conflict_rows
 FROM workspace.vf_silver.facility_extracted_attributes a
@@ -289,6 +302,7 @@ WHERE a.review_status='conflict' AND a.original_value IS NOT NULL AND a.value <>
 GROUP BY a.attribute;
 
 -- COMMAND ----------
+
 -- MAGIC %md
 -- MAGIC ## 4. README documentation (only after real execution)
 -- MAGIC Once the validation queries have run successfully, append an **Implemented —
