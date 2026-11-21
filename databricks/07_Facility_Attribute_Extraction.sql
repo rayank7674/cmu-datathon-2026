@@ -136,13 +136,19 @@ scored AS (
  FROM flags
 ),
 consistency AS (
- SELECT *, COUNT(DISTINCT CASE WHEN final_rejection IS NULL THEN candidate_value END)
-                OVER (PARTITION BY facility_id, attribute) AS distinct_valid_values,
-         ROW_NUMBER() OVER (PARTITION BY facility_id, attribute
-                            ORDER BY CASE WHEN final_rejection IS NULL THEN 0 ELSE 1 END,
-                                     CASE WHEN source_field='description' THEN 0 ELSE 1 END,
-                                     source_field, quote) AS rn
- FROM scored
+ SELECT s.*, c.distinct_valid_values,
+         ROW_NUMBER() OVER (PARTITION BY s.facility_id, s.attribute
+                            ORDER BY CASE WHEN s.final_rejection IS NULL THEN 0 ELSE 1 END,
+                                     CASE WHEN s.source_field='description' THEN 0 ELSE 1 END,
+                                     s.source_field, s.quote) AS rn
+ FROM scored s
+ JOIN (
+   SELECT facility_id, attribute,
+          COUNT(DISTINCT CASE WHEN final_rejection IS NULL THEN candidate_value END)
+            AS distinct_valid_values
+   FROM scored
+   GROUP BY facility_id, attribute
+ ) c ON c.facility_id = s.facility_id AND c.attribute = s.attribute
 ),
 results AS (
  SELECT facility_id, attribute,
