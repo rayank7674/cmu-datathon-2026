@@ -13,7 +13,7 @@
 # MAGIC **Ladder used everywhere:** claimed in the facility's own text -> `inferred` -> `externally_supported` -> `verified` -> currently available (always `unknown`).
 # MAGIC A map or directory match supports that the facility exists and its type. It never verifies a service.
 # MAGIC
-# MAGIC **Rerun:** the whole notebook is safe to rerun. After notebook 10 (external sources) or 07 (fixes) lands, rerun all cells; step 2 picks up `vf_silver.ext_facility_matches`, and step 1 picks up `facility_geo_quality` and `facility_duplicate_groups`, if they exist.
+# MAGIC **Rerun:** the whole notebook is safe to rerun. After notebook 10 (external sources) or 07 (fixes) lands, rerun all cells; step 2 picks up `vf_silver.ext_facility_matches`, and step 1 picks up `facility_level_v2`, `facility_geo_quality` and `facility_duplicate_groups`, if they exist.
 # MAGIC This notebook does not change any table from notebooks 01-08 or 10.
 
 # COMMAND ----------
@@ -24,6 +24,8 @@ def exists(table):
 HAS_GEOQ = exists("workspace.vf_silver.facility_geo_quality")       # chunk A
 HAS_DUPS = exists("workspace.vf_silver.facility_duplicate_groups")  # chunk A
 HAS_D    = exists("workspace.vf_silver.ext_facility_matches")       # chunk D
+LEVEL_TABLE = "workspace.vf_gold.facility_level_v2" if exists("workspace.vf_gold.facility_level_v2") else "workspace.vf_gold.facility_level"  # chunk A
+print("care levels read from:", LEVEL_TABLE)
 print("geo quality table:", HAS_GEOQ, "| duplicate groups:", HAS_DUPS, "| external matches from notebook 10:", HAS_D)
 
 # COMMAND ----------
@@ -95,9 +97,10 @@ geo_flag = "gq.geo_flag" if HAS_GEOQ else """CASE WHEN f.latitude IS NULL OR f.l
             WHEN f.coords_state_mismatch OR f.coords_far_from_any_pincode THEN 'suspect'
             ELSE 'good' END"""
 geo_src  = "'vf_silver.facility_geo_quality (notebook 07)'" if HAS_GEOQ else "'vf_silver.facilities flags (notebook 07 table not present)'"
-dup_join = """LEFT JOIN (SELECT facility_id, min(group_id) AS group_id FROM workspace.vf_silver.facility_duplicate_groups GROUP BY facility_id) dg
+dup_join = """LEFT JOIN (SELECT facility_id, min(group_id) AS group_id, min(confidence) AS confidence FROM workspace.vf_silver.facility_duplicate_groups GROUP BY facility_id) dg
               ON dg.facility_id = f.facility_id""" if HAS_DUPS else ""
 dup_col  = "CAST(dg.group_id AS STRING)" if HAS_DUPS else "CAST(NULL AS STRING)"
+dup_conf = "dg.confidence" if HAS_DUPS else "CAST(NULL AS STRING)"
 
 spark.sql(r"""
 CREATE OR REPLACE TABLE workspace.vf_gold.facility_service
@@ -210,6 +213,8 @@ SELECT
   __GEO_FLAG__ AS location_quality_flag,
   __GEO_SRC__  AS location_quality_source,
   __DUP_COL__  AS duplicate_group_id,
+  __DUP_CONF__ AS duplicate_confidence,
+  '__LEVEL_TABLE__' AS care_level_source,
   CASE WHEN f.official_phone IS NOT NULL OR size(f.phone_numbers) > 0 THEN 'listed_unverified' ELSE 'missing' END AS contact_verification_status,
   f.official_phone AS contact_phone,
   'unknown' AS availability_status,
@@ -217,13 +222,13 @@ SELECT
   coalesce(b.h24_quote, b.daytime_quote) AS hours_quote
 FROM base b
 JOIN workspace.vf_silver.facilities f ON f.facility_id = b.facility_id
-LEFT JOIN workspace.vf_gold.facility_level fl ON fl.facility_id = b.facility_id
+LEFT JOIN __LEVEL_TABLE__ fl ON fl.facility_id = b.facility_id
 __GEO_JOIN__
 __DUP_JOIN__
 """.replace("__NEG_PRE__", NEG_PRE.replace("\\", "\\\\")).replace("__NEG_POST__", NEG_POST.replace("\\", "\\\\"))
    .replace("__H24__", H24.replace("\\", "\\\\")).replace("__DAYTIME__", DAYTIME)
-   .replace("__GEO_FLAG__", geo_flag).replace("__GEO_SRC__", geo_src).replace("__DUP_COL__", dup_col)
-   .replace("__GEO_JOIN__", geo_join).replace("__DUP_JOIN__", dup_join))
+   .replace("__GEO_FLAG__", geo_flag).replace("__GEO_SRC__", geo_src).replace("__DUP_COL__", dup_col).replace("__DUP_CONF__", dup_conf)
+   .replace("__LEVEL_TABLE__", LEVEL_TABLE).replace("__GEO_JOIN__", geo_join).replace("__DUP_JOIN__", dup_join))
 
 # COMMAND ----------
 
@@ -284,7 +289,7 @@ src AS (
 ),
 chk AS (SELECT facility_id, level_check, operator_check, external_evidence FROM workspace.vf_gold.facility_external_check),
 fs AS (SELECT facility_id, service, claim_status, claim_detected FROM workspace.vf_gold.facility_service),
-fl AS (SELECT facility_id, nabh_claimed, pmjay_claimed, cghs_claimed FROM workspace.vf_gold.facility_level),
+fl AS (SELECT facility_id, nabh_claimed, pmjay_claimed, cghs_claimed FROM __LEVEL_TABLE__),
 ext_rows AS (
   -- a) the facility exists in an outside source (existence only, never a service)
   SELECT s.facility_id, '_facility_existence' AS service, CAST(NULL AS STRING) AS claim_status, 'externally_supported' AS verification_status,
@@ -368,7 +373,7 @@ SELECT
      ORDER BY CASE verification_status WHEN 'verified' THEN 1 WHEN 'contradicted' THEN 2 WHEN 'externally_supported' THEN 3 WHEN 'inferred' THEN 4 ELSE 5 END,
               coalesce(score, 0) DESC, source) = 1 AS is_primary
 FROM allrows
-""".replace("__D_UNION__", d_union))
+""".replace("__D_UNION__", d_union).replace("__LEVEL_TABLE__", LEVEL_TABLE))
 
 # COMMAND ----------
 
