@@ -375,6 +375,7 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-22 | Matching second pass (notebook 17): 136 eRaktKosh and 27 Wikidata matches added as medium, 94 ambiguous; view `ext_facility_matches_all` read by notebooks 09 and 13; facilities with outside evidence 1,144 to 1,253. See section 22 |
 | 2026-11-22 | Rural Health Statistics 2021-22 loaded (notebook 18): government facility counts for 737 districts (706 linked to map districts, 31 left unlinked) and state beds and staff; `district_public_facilities`, `state_public_health_capacity`; shown in the app's Policy tab. See section 23 |
 | 2026-11-22 | 28 of the 31 unlinked RHS districts confirmed by hand (734 of 737 linked). Critical blocks in districts with government health centres or hospitals but no facility in our data are flagged (`critical_zones_govt_caveat`) and ringed on the Policy map. See sections 23 and 23.1 |
+| 2026-11-22 | Final hand check of 60 claims (20 per strength): strong 20 of 20 supported, moderate 16 of 20 (2 wrong), weak 7 of 20 (1 wrong, 8 label only); about 6% wrong when weighted. `facility_service_handcheck_final`. See section 24 |
 
 ## 12. Implemented: service search tables (chunk C, notebook 09)
 
@@ -1096,6 +1097,28 @@ A critical block means "far from any facility in this dataset". Where the block'
 So 83% of the blocks under the 150 km rule, and about half of the people in them, sit in districts where the government runs health centres or hospitals that this dataset does not list. Whether those can handle a life-threatening emergency is unknown.
 
 App: on the Policy map, flagged districts are ringed in red with the label "government care exists, not in our data" and a hover note giving the counts; a warning under the map states the number of ringed districts and government facilities for the chosen service. `rhs_checks` is now 15 of 15.
+
+---
+
+## 24. Final hand check of service claims (2026-11-22)
+
+**Method.** 60 claims from `vf_gold.facility_service` (after all external evidence was integrated): the first 20 per claim strength in a fixed pseudo-random order (`xxhash64(facility_id, service, 'final-handcheck-2026-11-22')`), so the sample can be redrawn. Each was read against its quotes, the facility type and the outside evidence, and given one verdict. The sample was stratified because a plain random 50 would hold too few strong claims to say anything about them. Rows and verdicts: `vf_gold.facility_service_handcheck_final` and `handcheck_final_2026-11-22.csv`. Checked by Claude, not by a clinician.
+
+| Claim strength | Claims in data | Supported: text states the service | Narrower than the service | Label only | Wrong |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Strong (direct wording in 2+ fields) | 5,931 | 20 of 20 | 0 | 0 | 0 |
+| Moderate (direct wording in one field) | 9,321 | 16 of 20 | 2 | 0 | 2 |
+| Weak (label or indirect wording) | 11,153 | 7 of 20 | 4 | 8 | 1 |
+
+- **Wrong (3 of 60).** "Dental chair with integrated delivery unit" read as childbirth; "trauma care" at a dental clinic, meaning dental trauma (the pipeline had already flagged it as unusual for the facility type); "DVT catheter-directed thrombolysis" read as stroke care.
+- **Narrower (6).** The text is about one specialty: children's eye care or children's dentistry counted as paediatrics, emergency eye care counted as emergency care, and a diagnostic lab that says it "provides emergency services".
+- **Label only (8).** A specialty tag such as obstetrics and gynaecology, with no statement that deliveries are done. This is what "weak" means by design.
+
+**Numbers to quote.** Weighted by how many claims of each strength exist, about 6% of all claims are wrong (0% strong, 10% moderate, 5% weak) and about 65% are stated outright by the facility's own text (100% strong, 80% moderate, 35% weak). With 20 per group these are rough: 0 of 20 still allows a true error rate of up to about 14%, and 2 of 20 a range of about 1% to 32%.
+
+**What it does not measure.** "Supported" means the facility's text says it, not that the service exists or works today. Only 1 of the 60 claims had outside support for the service itself (Silchar Medical College's blood bank, listed in eRaktKosh), and none is verified. The earlier hand check is in section 12.6.
+
+**Not fixed.** The three wrong patterns are left in the data and documented here; the better-evidenced tier already excludes weak claims and plausibility-flagged ones, which removes two of the three.
 
 ---
 
