@@ -100,6 +100,17 @@ class Config:
     # ---- step 9: safety rules ---------------------------------------------
     stabilise_threshold_min: float = 60.0  # golden hour
     stabilise_min_rung: int = 3
+    # A stabilising facility must state emergency care directly (not just a
+    # specialty tag like "eye trauma and emergency eye care").
+    stabilise_claim_strengths: tuple = ("strong", "moderate")
+    stabilise_exclude_plausibility_flag: bool = True   # any flagged claim on the facility
+    stabilise_exclude_single_specialty: bool = True
+    single_specialty_kinds: tuple = ("Single-specialty hospital", "Diagnostic centre", "Pharmacy")
+    # Same name pattern notebook 04 uses for is_single_specialty (catches records whose kind missed it).
+    single_specialty_name_pattern: str = (
+        r"\beye\b|netra|nethra|dental|dentist|\bskin\b|derma|\bivf\b|fertility|\bent\b|physiother"
+        r"|\bhair\b|cosmetic|psychiatr|de-?addiction|rehab|ortho(?:paedic|pedic)? cent")
+    single_specialty_name_exempt: str = r"multi|general|medical college"
     close_call_margin: float = 0.03
 
     # ---- helpers ----------------------------------------------------------
@@ -109,7 +120,8 @@ class Config:
     @classmethod
     def from_json(cls, path: str | Path) -> "Config":
         data = json.loads(Path(path).read_text())
-        for k in ("expand_radius_km", "usable_location_flags", "default_transport"):
+        for k in ("expand_radius_km", "usable_location_flags", "default_transport",
+                  "stabilise_claim_strengths", "single_specialty_kinds"):
             if k in data:
                 data[k] = tuple(data[k])
         if "p_service_by_strength" in data:

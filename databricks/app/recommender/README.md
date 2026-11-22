@@ -30,7 +30,7 @@ r.trace                # one line per step, in order: what it did and how long i
 | 7 | `care_probability` | candidates, conditions, claims | P(care \| h, c) and its factors | `p_service_by_strength`, verification adjustments, `quality_weight`, `rung_shortfall_factor`, `unknown_rung_factor`, `unknown_hours_factor`, `timeliness_curve`, `late_care_benefit`; `conditions.csv` needs, min_rung, tau_min |
 | 8 | `score` | P(care), P(condition), weight | ranked (need_met) | (none) |
 | 8b | `travel_burden` | ranked, P(life-threatening) | score = need_met − burden | `travel_burden_weight`, `travel_burden_cap_min` |
-| 9 | `safety_rules` | everything | alerts | `SAFETY_RULES` list, `stabilise_threshold_min`, `stabilise_min_rung`, `close_call_margin` |
+| 9 | `safety_rules` | everything | alerts | `SAFETY_RULES` list, `stabilise_threshold_min`, `stabilise_min_rung`, `stabilise_claim_strengths`, `stabilise_exclude_*`, `single_specialty_*`, `close_call_margin` |
 | 10 | `explain` | ranked, factors | explanations, nearest_not_chosen | `top_n` |
 
 ### The maths
@@ -60,5 +60,6 @@ r.trace                # one line per step, in order: what it did and how long i
 * Travel time is a straight-line estimate until a road-time provider is plugged in. The ambulance wait (25 min) comes from Maharashtra 108 data (Jana et al. 2023).
 * Service presence comes from the facility's own text: 99.94% of claims are self-reported. Whether a service is available right now is always unknown.
 * Facilities with a suspect or invalid location are never ranked by travel time.
+* A facility is named as "stabilise here first" only if it meets all of these: it states emergency care directly (a strong or moderate claim, not a specialty tag), it is care level 3 or higher, none of its claims has a plausibility flag, and it is not single-specialty (judged by level_kind or by name, using the same pattern as notebook 04). This rule was added after a live test named an eye hospital.
 
 Tests: `python -m pytest -q tests` from the `app/` folder.

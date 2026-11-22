@@ -430,23 +430,51 @@ def rule_telehealth_first(s: State, cfg: Config) -> None:
                 "(esanjeevani.mohfw.gov.in). If the doctor says to go in, these are the best places.")
 
 
+def stabilise_eligible(s: State, cfg: Config, c: pd.DataFrame) -> tuple[pd.Series, dict]:
+    """Which ranked facilities may be named as 'stabilise here first'.
+
+    Needs: care level >= stabilise_min_rung; a DIRECT emergency claim (strong or
+    moderate); no plausibility flag on any of its claims; not single-specialty
+    (by level_kind or by name). Returns the mask and how many each check removed.
+    """
+    cl = s.claims[s.claims["facility_id"].isin(c["facility_id"])]
+    em = cl[(cl["service"] == "emergency") & cl["claim_strength"].isin(cfg.stabilise_claim_strengths)]
+    ok_claim = c["facility_id"].isin(em["facility_id"])
+    ok_rung = pd.to_numeric(c["care_level"], errors="coerce") >= cfg.stabilise_min_rung
+    ok_flag = pd.Series(True, index=c.index)
+    if cfg.stabilise_exclude_plausibility_flag and "plausibility_flag" in cl:
+        flagged = cl.loc[cl["plausibility_flag"].fillna("").astype(str).str.strip().ne("")
+                         & cl["plausibility_flag"].astype(str).ne("None"), "facility_id"]
+        ok_flag = ~c["facility_id"].isin(flagged)
+    ok_single = pd.Series(True, index=c.index)
+    if cfg.stabilise_exclude_single_specialty:
+        kind = c["level_kind"].fillna("") if "level_kind" in c else pd.Series("", index=c.index)
+        name = c["name"].fillna("").str.lower()
+        by_name = name.str.contains(cfg.single_specialty_name_pattern, regex=True) & \
+            ~name.str.contains(cfg.single_specialty_name_exempt, regex=True)
+        ok_single = ~(kind.isin(cfg.single_specialty_kinds) | by_name)
+    removed = {"no direct emergency claim": int((~ok_claim).sum()), "care level too low": int((~ok_rung).sum()),
+               "plausibility flag": int((~ok_flag).sum()), "single-specialty": int((~ok_single).sum())}
+    return ok_claim & ok_rung & ok_flag & ok_single, removed
+
+
 def rule_stabilise_and_transfer(s: State, cfg: Config) -> None:
     if not s.is_red or s.ranked is None or s.ranked.empty:
         return
     top = s.ranked.iloc[0]
     if top["minutes"] <= cfg.stabilise_threshold_min:
         return
-    P = s.care["p_service"]
     c = s.ranked
-    em = P.loc[c.index, "emergency"] if "emergency" in P else pd.Series(0, index=c.index)
-    ok = (pd.to_numeric(c["care_level"], errors="coerce") >= cfg.stabilise_min_rung) & (em > cfg.p_service_by_strength[None])
+    ok, removed = stabilise_eligible(s, cfg, c)
     near = c[ok & (c["minutes"] < top["minutes"])].sort_values("minutes")
+    s.log("stabilise_check", f"{int(ok.sum())} facilities could stabilise; excluded: "
+          + ", ".join(f"{k} {v}" for k, v in removed.items()))
     if len(near):
         n = near.iloc[0]
         s.ranked.loc[n.name, "stabilise"] = True
         s.alert("stabilise_and_transfer", "warning",
                 f"The best match is about {top['minutes']:.0f} min away. {n['name']} is about "
-                f"{n['minutes']:.0f} min away and says it has emergency care: go there first to be "
+                f"{n['minutes']:.0f} min away and states it has emergency care: go there first to be "
                 "stabilised, then transfer.")
 
 
