@@ -24,6 +24,9 @@ def exists(table):
 HAS_GEOQ = exists("workspace.vf_silver.facility_geo_quality")       # chunk A
 HAS_DUPS = exists("workspace.vf_silver.facility_duplicate_groups")  # chunk A
 HAS_D    = exists("workspace.vf_silver.ext_facility_matches")       # chunk D
+HAS_NABH_RAW  = exists("workspace.vf_bronze.ext_nabh_raw")          # Task D source detail (NABH programme and status)
+HAS_ERAKT_RAW = exists("workspace.vf_bronze.ext_eraktkosh_raw")     # Task D source detail (blood centre type)
+HAS_EXT_CLEAN = exists("workspace.vf_silver.ext_facilities_clean")  # Task D cleaned external records
 LEVEL_TABLE = "workspace.vf_gold.facility_level_v2" if exists("workspace.vf_gold.facility_level_v2") else "workspace.vf_gold.facility_level"  # chunk A
 print("care levels read from:", LEVEL_TABLE)
 print("geo quality table:", HAS_GEOQ, "| duplicate groups:", HAS_DUPS, "| external matches from notebook 10:", HAS_D)
@@ -244,7 +247,9 @@ __DUP_JOIN__
 # MAGIC | `verified` | A source that actually establishes this specific thing | only the sources in the table below |
 # MAGIC | `contradicted` | An outside source disagrees | type or tier mismatch |
 # MAGIC
-# MAGIC Sources allowed to grant `verified`, and only for the thing named: eRaktKosh -> `blood_bank` (registered blood centre); official CGHS list -> `_cghs_empanelment`; official PM-JAY list -> `_pmjay_empanelment`; NABH directory -> `_nabh_accreditation`.
+# MAGIC Sources allowed to grant `verified`, and only for the thing named: official CGHS list -> `_cghs_empanelment`; official PM-JAY list -> `_pmjay_empanelment` (neither is loaded yet).
+# MAGIC
+# MAGIC **Task D sources (2026-11-22) grant `externally_supported` at most, never `verified`:** an accepted eRaktKosh match whose record is a Blood Bank supports `blood_bank` as a directory listing only (not stock, not working today); an accepted NABH match whose record shows accreditation supports `_nabh_accreditation`, with validity unknown because the directory has no dates and the match is name + pincode. NABH certification, empanelment and unclear entries go to `_nabh_listing`. A withdrawn or suspended NABH record against a facility that claims NABH is `contradicted`. Wikidata supports existence only.
 # MAGIC None of these verify a clinical capability other than the one named, and none say anything about availability today.
 # MAGIC
 # MAGIC Rows whose service starts with `_` are about the facility, not a clinical service: `_facility_existence`, `_facility_type`, and the scheme / accreditation badges.
@@ -258,13 +263,46 @@ d_cols = [r[0] for r in spark.sql("DESCRIBE TABLE workspace.vf_silver.ext_facili
 d_filter = "lower(CAST(match_status AS STRING)) LIKE 'accepted%'" if "match_status" in d_cols else "lower(coalesce(CAST(match_method AS STRING), '')) NOT LIKE '%ambig%'"
 d_km  = "CAST(distance_km AS DOUBLE)" if "distance_km" in d_cols else "CAST(NULL AS DOUBLE)"
 d_ref = "CAST(source_ref AS STRING)" if "source_ref" in d_cols else "CAST(NULL AS STRING)"
+# What the matched outside record actually says. A match only tells us WHICH record; these fields say what that
+# record establishes. Read from the Task D bronze tables when they exist; otherwise left null (treated as "details unknown").
+NABH_STATUS_RAW = r"trim(regexp_replace(get_json_object(n.raw_json, '$.status_raw'), '[\\s'']+', ' '))"
+nabh_kind = r"""CASE
+      WHEN lower(get_json_object(n.raw_json, '$.status')) = 'withdrawn' OR lower(__RAW__) LIKE '%withdraw%' THEN 'withdrawn'
+      WHEN lower(__RAW__) LIKE '%suspen%' THEN 'suspended'
+      WHEN lower(get_json_object(n.raw_json, '$.status')) IN ('accredited', 'renewed')
+           AND get_json_object(n.raw_json, '$.identifier_prefix') IN ('H', 'SHCO') THEN 'accredited_hospital_programme'
+      WHEN lower(get_json_object(n.raw_json, '$.status')) IN ('accredited', 'renewed') THEN 'accredited_other_programme'
+      WHEN lower(get_json_object(n.raw_json, '$.status')) = 'certified' THEN 'certification_not_accreditation'
+      WHEN lower(get_json_object(n.raw_json, '$.status')) = 'empanelled' THEN 'empanelment_not_accreditation'
+      WHEN n.source_record_id IS NOT NULL THEN 'status_unclear' END""".replace("__RAW__", NABH_STATUS_RAW)
+nabh_label = r"""concat_ws('; ', concat('programme: ', coalesce(get_json_object(n.raw_json, '$.programme'), concat('not stated (id prefix ', get_json_object(n.raw_json, '$.identifier_prefix'), ')'))),
+                 concat('directory status: ', __RAW__), concat('no. ', get_json_object(n.raw_json, '$.accreditation_no')))""".replace("__RAW__", NABH_STATUS_RAW)
+d_kind  = "CASE WHEN m.source = 'nabh' THEN %s WHEN m.source = 'eraktkosh' THEN %s END" % (
+    nabh_kind if HAS_NABH_RAW else "CAST(NULL AS STRING)",
+    "get_json_object(e.raw_json, '$.centre_type')" if HAS_ERAKT_RAW else "CAST(NULL AS STRING)")
+d_label = "CASE WHEN m.source = 'nabh' THEN %s WHEN m.source = 'eraktkosh' THEN %s END" % (
+    nabh_label if HAS_NABH_RAW else "CAST(NULL AS STRING)",
+    "concat_ws(', ', get_json_object(e.raw_json, '$.centre_type'), get_json_object(e.raw_json, '$.category'), concat('directory code ', get_json_object(e.raw_json, '$.hospital_code')))" if HAS_ERAKT_RAW else "CAST(NULL AS STRING)")
+d_ref_parts = []
+if HAS_NABH_RAW:  d_ref_parts += ["get_json_object(n.raw_json, '$.certificate_url')", "get_json_object(n.raw_json, '$.source_url')"]
+if HAS_ERAKT_RAW: d_ref_parts += ["get_json_object(e.raw_json, '$.source_url')"]
+if HAS_EXT_CLEAN: d_ref_parts += ["CASE WHEN c.source_ref LIKE 'http%' THEN c.source_ref END"]
+d_ref_parts += [d_ref]
+d_joins = ""
+if HAS_NABH_RAW:  d_joins += "\n  LEFT JOIN workspace.vf_bronze.ext_nabh_raw n ON m.source = 'nabh' AND n.source_record_id = m.source_record_id"
+if HAS_ERAKT_RAW: d_joins += "\n  LEFT JOIN workspace.vf_bronze.ext_eraktkosh_raw e ON m.source = 'eraktkosh' AND e.source_record_id = m.source_record_id"
+if HAS_EXT_CLEAN: d_joins += "\n  LEFT JOIN workspace.vf_silver.ext_facilities_clean c ON c.source = m.source AND c.source_record_id = m.source_record_id"
+d_status = "CAST(m.match_status AS STRING)" if "match_status" in d_cols else "'accepted'"
 d_union = r"""
   UNION ALL
-  SELECT facility_id, CAST(source AS STRING), CAST(source_record_id AS STRING), CAST(NULL AS STRING), CAST(NULL AS INT), CAST(NULL AS STRING),
-         CAST(NULL AS STRING), __D_KM__, CAST(match_score AS DOUBLE), concat('notebook 10 match: ', CAST(match_method AS STRING)), 'vf_silver.ext_facility_matches', __D_REF__
-  FROM workspace.vf_silver.ext_facility_matches
-  WHERE facility_id IS NOT NULL AND __D_FILTER__
-""".replace("__D_KM__", d_km).replace("__D_REF__", d_ref).replace("__D_FILTER__", d_filter) if HAS_D else ""
+  SELECT m.facility_id, CAST(m.source AS STRING), CAST(m.source_record_id AS STRING), __D_KIND__, CAST(NULL AS INT), __D_LABEL__,
+         CAST(NULL AS STRING), __D_KM__, CAST(m.match_score AS DOUBLE),
+         concat('notebook 10 match: ', CAST(m.match_method AS STRING), ' (', __D_STATUS__, ')'), 'vf_silver.ext_facility_matches', coalesce(__D_REF__)
+  FROM workspace.vf_silver.ext_facility_matches m__D_JOINS__
+  WHERE m.facility_id IS NOT NULL AND __D_FILTER__
+""".replace("__D_KIND__", d_kind).replace("__D_LABEL__", d_label).replace("__D_KM__", d_km.replace("distance_km", "m.distance_km")) \
+   .replace("__D_STATUS__", d_status).replace("__D_REF__", ", ".join(d_ref_parts).replace("CAST(source_ref", "CAST(m.source_ref")) \
+   .replace("__D_JOINS__", d_joins).replace("__D_FILTER__", d_filter.replace("match_status", "m.match_status").replace("match_method", "m.match_method")) if HAS_D else ""
 
 spark.sql(r"""
 CREATE OR REPLACE TABLE workspace.vf_gold.facility_verification
@@ -277,7 +315,7 @@ WITH m0 AS (
   __D_UNION__
 ),
 m AS (  -- one row per facility and source: the best-scoring match
-  SELECT facility_id, source, max_by(named_struct('ext_id', ext_id, 'ext_kind', ext_kind, 'ext_tier', ext_tier, 'ext_specialities', ext_specialities,
+  SELECT facility_id, source, max_by(named_struct('ext_id', ext_id, 'ext_kind', ext_kind, 'ext_tier', ext_tier, 'ext_label', ext_operator, 'ext_specialities', ext_specialities,
                                                   'km', km, 'score', name_sim, 'method', method, 'via', via, 'ref', ref), coalesce(name_sim, 0)) AS x
   FROM m0 GROUP BY facility_id, source
 ),
@@ -300,7 +338,7 @@ ext_rows AS (
   -- a) the facility exists in an outside source (existence only, never a service)
   SELECT s.facility_id, '_facility_existence' AS service, CAST(NULL AS STRING) AS claim_status, 'externally_supported' AS verification_status,
          s.source, s.ext_id, s.source_url, s.score, s.method, s.km,
-         concat('Matched to a ', s.source_class, ' record', coalesce(concat(' ', round(s.km, 2), ' km away'), ''), '. Supports that the facility exists; says nothing about any service.') AS notes,
+         concat('Matched to a ', s.source_class, ' record', coalesce(concat(' ', round(s.km, 2), ' km away'), ''), ' (', s.method, '). Supports that the facility exists; says nothing about any service.') AS notes,
          false AS contradiction_flag
   FROM src s
   UNION ALL
@@ -325,20 +363,46 @@ ext_rows AS (
   JOIN fs f ON f.facility_id = s.facility_id AND f.service = r.service
   WHERE s.ext_specialities IS NOT NULL AND s.source_class <> 'eraktkosh'
   UNION ALL
-  -- d) sources that establish one specific thing
+  -- d) sources that are about one specific thing.
+  --    A match says which outside record this is; what it establishes comes from that record's own fields.
+  --    NABH and eRaktKosh never grant 'verified' here: the NABH file has no validity dates and its matches are
+  --    name + pincode identity candidates; an eRaktKosh row is a directory listing, not proof the blood bank works today.
   SELECT s.facility_id,
-         CASE s.source_class WHEN 'eraktkosh' THEN 'blood_bank' WHEN 'cghs' THEN '_cghs_empanelment' WHEN 'pmjay' THEN '_pmjay_empanelment' WHEN 'nabh' THEN '_nabh_accreditation' END,
-         CASE s.source_class WHEN 'eraktkosh' THEN f.claim_status
+         CASE s.source_class
+              WHEN 'eraktkosh' THEN CASE WHEN lower(s.ext_kind) = 'blood bank' THEN 'blood_bank'
+                                         WHEN s.ext_kind IS NULL THEN '_blood_centre_listing' ELSE '_blood_storage_listing' END
+              WHEN 'cghs' THEN '_cghs_empanelment' WHEN 'pmjay' THEN '_pmjay_empanelment'
+              WHEN 'nabh' THEN CASE WHEN s.ext_kind LIKE 'accredited%' THEN '_nabh_accreditation'
+                                    WHEN s.ext_kind IN ('withdrawn', 'suspended') AND coalesce(l.nabh_claimed, false) THEN '_nabh_accreditation'
+                                    ELSE '_nabh_listing' END END,
+         CASE s.source_class WHEN 'eraktkosh' THEN CASE WHEN lower(s.ext_kind) = 'blood bank' THEN f.claim_status END
               WHEN 'cghs' THEN CASE WHEN l.cghs_claimed THEN 'claimed' ELSE 'not_found' END
               WHEN 'pmjay' THEN CASE WHEN l.pmjay_claimed THEN 'claimed' ELSE 'not_found' END
               WHEN 'nabh' THEN CASE WHEN l.nabh_claimed THEN 'claimed' ELSE 'not_found' END END,
-         'verified', s.source, s.ext_id, s.source_url, s.score, s.method, s.km,
-         CASE s.source_class
-              WHEN 'eraktkosh' THEN 'Listed as a blood centre in the eRaktKosh directory. Stock and opening hours today are unknown.'
-              WHEN 'cghs' THEN 'Listed in the official CGHS empanelled hospital file. Does not show which specialties or cities are covered, or that it is current.'
-              WHEN 'pmjay' THEN 'Listed in the official PM-JAY empanelment file. Does not guarantee free treatment or a given package.'
-              WHEN 'nabh' THEN 'Listed in the NABH accreditation directory. Accreditation is not proof of any specific emergency capability.' END,
-         false
+         CASE WHEN s.source_class IN ('cghs', 'pmjay') THEN 'verified'
+              WHEN s.source_class = 'nabh' AND s.ext_kind IN ('withdrawn', 'suspended') AND coalesce(l.nabh_claimed, false) THEN 'contradicted'
+              ELSE 'externally_supported' END,
+         s.source, s.ext_id, s.source_url, s.score, s.method, s.km,
+         CASE
+           WHEN s.source_class = 'eraktkosh' AND lower(s.ext_kind) = 'blood bank' THEN
+             concat('Listed as a Blood Bank in the official eRaktKosh blood-centre directory (', coalesce(s.ext_label, 'details not available'), '). Directory listing only: it does not show that the blood bank is working today, what is in stock, or that its licence is current.')
+           WHEN s.source_class = 'eraktkosh' AND s.ext_kind IS NOT NULL THEN
+             concat('Listed in the eRaktKosh directory as "', s.ext_kind, '", which is a blood storage unit, not a blood bank (', coalesce(s.ext_label, ''), '). Does not support a blood bank claim.')
+           WHEN s.source_class = 'eraktkosh' THEN 'Matched to an eRaktKosh directory record, but the centre type is not available, so it is not counted as blood bank evidence.'
+           WHEN s.source_class = 'cghs' THEN 'Listed in the official CGHS empanelled hospital file. Does not show which specialties or cities are covered, or that it is current.'
+           WHEN s.source_class = 'pmjay' THEN 'Listed in the official PM-JAY empanelment file. Does not guarantee free treatment or a given package.'
+           WHEN s.source_class = 'nabh' AND s.ext_kind = 'accredited_hospital_programme' THEN
+             concat('The matched NABH directory record shows hospital accreditation (', s.ext_label, '). The directory gives no validity dates, so whether it is current is unknown, and the match is by name and pincode only. Accreditation is not proof of any specific clinical capability.')
+           WHEN s.source_class = 'nabh' AND s.ext_kind = 'accredited_other_programme' THEN
+             concat('The matched NABH directory record shows accreditation under a programme that is not the general hospital programme (', s.ext_label, '). No validity dates; match by name and pincode only. Not proof of any specific clinical capability.')
+           WHEN s.source_class = 'nabh' AND s.ext_kind IN ('withdrawn', 'suspended') THEN
+             concat('The matched NABH directory record shows accreditation ', s.ext_kind, ' (', s.ext_label, ').', CASE WHEN coalesce(l.nabh_claimed, false) THEN ' The facility''s own text claims NABH accreditation, so the two disagree.' ELSE '' END, ' Match by name and pincode only.')
+           WHEN s.source_class = 'nabh' AND s.ext_kind = 'certification_not_accreditation' THEN
+             concat('The matched NABH directory record is a certification, not accreditation (', s.ext_label, '). No validity dates; match by name and pincode only.')
+           WHEN s.source_class = 'nabh' AND s.ext_kind = 'empanelment_not_accreditation' THEN
+             concat('The matched NABH directory record is an empanelment entry, not accreditation (', s.ext_label, '). No validity dates; match by name and pincode only.')
+           WHEN s.source_class = 'nabh' THEN concat('Matched to an NABH directory record whose status is unclear or not available (', coalesce(s.ext_label, 'no details'), '). Accreditation status: unknown.') END,
+         s.source_class = 'nabh' AND s.ext_kind IN ('withdrawn', 'suspended') AND coalesce(l.nabh_claimed, false)
   FROM src s
   LEFT JOIN fs f ON f.facility_id = s.facility_id AND f.service = 'blood_bank'
   LEFT JOIN fl l ON l.facility_id = s.facility_id
