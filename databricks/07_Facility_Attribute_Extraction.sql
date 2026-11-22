@@ -44,7 +44,9 @@ COMMENT 'Strict quoted regex evidence from facility-associated text; conflict an
 -- COMMAND ----------
 
 -- Extract full literal numeric phrase (quote) then evaluate nearby context.
--- Regexp_extract_all (Databricks SQL / Spark SQL) uses Java regex syntax.
+-- Java regex (used by Databricks SQL regexp functions) does NOT support
+-- POSIX classes like [[:space:]]; every pattern below is a raw string
+-- literal r'...' using \s so no double escaping is needed.
 -- Regexes avoid numeric ranges beginning with "10-20" or "10 to 20" via
 -- contextual filtering; the final review_status gate also rejects ambiguity.
 INSERT OVERWRITE workspace.vf_silver.facility_extracted_attributes
@@ -71,16 +73,16 @@ WITH texts AS (
 ),
 patterns AS (
   SELECT *, 'beds' AS attribute,
-    '(?i)(?<![0-9/-])[0-9]{1,5}[[:space:]-]*(?:beds?|bedded)(?![a-z])' AS rx
+    r'(?i)(?<![0-9/-])[0-9]{1,5}[\s-]*(?:beds?|bedded)(?![a-z])' AS rx
   FROM texts
   UNION ALL SELECT *, 'doctors',
-    '(?i)(?<![0-9/-])[0-9]{1,5}[[:space:]]+(?:doctors|consultants)(?![a-z])'
+    r'(?i)(?<![0-9/-])[0-9]{1,5}\s+(?:doctors|consultants)(?![a-z])'
   FROM texts
   UNION ALL SELECT *, 'year_founded',
-    '(?i)(?<![a-z])(?:established|founded|since)[[:space:]]+(?:in[[:space:]]+)?(?:18|19|20)[0-9]{2}(?![0-9])'
+    r'(?i)(?<![a-z])(?:established|founded|since)\s+(?:in\s+)?(?:18|19|20)[0-9]{2}(?![0-9])'
   FROM texts
   UNION ALL SELECT *, 'icu_beds',
-    '(?i)(?<![0-9/-])[0-9]{1,5}[[:space:]-]*beds?[[:space:]]+(?:in[[:space:]]+)?(?:the[[:space:]]+)?(?:icu|intensive[[:space:]]+care[[:space:]]+unit)(?![a-z])'
+    r'(?i)(?<![0-9/-])(?:[0-9]{1,5}[\s-]*beds?\s+(?:(?:in|of|at|for)\s+|dedicated\s+to\s+)?(?:(?:the|our)\s+)?(?:icu|intensive\s+care\s+unit)|(?<![a-z])(?:icu|intensive\s+care\s+unit)[\s:,-]{0,3}[0-9]{1,5}[\s-]*beds?|[0-9]{1,5}\s+(?:icu|intensive\s+care\s+unit)[\s-]*beds?)(?![a-z])'
   FROM texts
 ),
 hits AS (
@@ -104,13 +106,13 @@ flags AS (
    WHEN attribute = 'year_founded' AND NOT candidate_value BETWEEN 1850 AND 2026 THEN 'year outside 1850-2026'
    WHEN attribute IN ('beds','icu_beds') AND candidate_value > 5000 THEN 'bed count above 5000'
    WHEN attribute = 'doctors' AND candidate_value > 2000 THEN 'doctor count above 2000'
-   WHEN lower(substring(source_text, greatest(1, instr(lower(source_text),lower(quote))-18), length(quote)+36)) RLIKE '(?i)(up[[:space:]]+to|at[[:space:]]+most|maximum[[:space:]]+of|approx(?:imately)?|around|about|nearly|more[[:space:]]+than|over[[:space:]]+[0-9]|[0-9][[:space:]]*(?:to|[-–])[[:space:]]*[0-9])'
+   WHEN lower(substring(source_text, greatest(1, instr(lower(source_text),lower(quote))-18), length(quote)+36)) RLIKE r'(?i)(up\s+to|at\s+most|maximum\s+of|approx(?:imately)?|around|about|nearly|more\s+than|over\s+[0-9]|[0-9]\s*(?:to|[-–])\s*[0-9])'
      THEN 'approximate, range or qualified numeric context'
-   WHEN attribute = 'doctors' AND lower(context_text) RLIKE '(?i)(across (?:all|our) (?:branches|centres|centers)|in the (?:department|unit)|department of|specialty team|speciality team)'
+   WHEN attribute = 'doctors' AND lower(context_text) RLIKE r'(?i)(across\s+(?:all|our)\s+(?:branches|centres|centers)|in\s+the\s+(?:department|unit)|department\s+of|specialty\s+team|speciality\s+team)'
      THEN 'possibly department or multi-site doctor count'
-   WHEN lower(context_text) RLIKE '(?i)(across (?:our|all|the) (?:hospitals|locations|facilities|centres|centers)|group[- ]wide|entire chain|network[- ]wide|all branches|chain of hospitals|group of hospitals)'
+   WHEN lower(context_text) RLIKE r'(?i)(across\s+(?:our|all|the)\s+(?:hospitals|locations|facilities|centres|centers)|group[-\s]wide|entire\s+chain|network[-\s]wide|all\s+branches|chain\s+of\s+hospitals|group\s+of\s+hospitals)'
      THEN 'possibly chain-wide count'
-   WHEN attribute = 'year_founded' AND lower(context_text) RLIKE '(?i)(founded by|since (?:the|its) founding)'
+   WHEN attribute = 'year_founded' AND lower(context_text) RLIKE r'(?i)(founded\s+by|since\s+(?:the|its)\s+founding)'
      THEN 'founding year may not refer to facility'
    ELSE NULL END AS rejection_reason
  FROM parsed
@@ -122,11 +124,12 @@ scored AS (
  SELECT *,
   CASE WHEN attribute='beds' AND lower(substring(source_text,
                instr(lower(source_text), lower(quote)) + length(quote), 45))
-               RLIKE '(?i)^[[:space:]]*(?:dedicated[[:space:]]+)?(?:(?:to|for)[[:space:]]+)?(?:icu|nicu|picu|ccu|hdu|ward|department)' 
+               RLIKE r'(?i)^\s*(?:dedicated\s+)?(?:(?:to|for|in|of|at)\s+)?(?:the\s+|our\s+)?(?:icu|nicu|picu|ccu|hdu|intensive\s+care\s+unit|ward|department)' 
        THEN 'bed figure attached to department/unit'
        WHEN attribute='beds' AND lower(substring(source_text,
-               greatest(1,instr(lower(source_text), lower(quote))-25),25))
-               RLIKE '(?i)(icu|nicu|picu|ccu|hdu|ward|department)[[:space:]:-]*$'
+               greatest(1,instr(lower(source_text), lower(quote))-25),
+               least(25, instr(lower(source_text), lower(quote))-1)))
+               RLIKE r'(?i)(?:icu|nicu|picu|ccu|hdu|intensive\s+care\s+unit|ward|department)[\s:,-]*$'
        THEN 'department/unit-specific beds'
        ELSE rejection_reason END AS final_rejection,
   CASE attribute WHEN 'beds' THEN capacity_beds
