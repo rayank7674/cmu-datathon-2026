@@ -23,7 +23,7 @@ def exists(table):
 
 HAS_GEOQ = exists("workspace.vf_silver.facility_geo_quality")       # chunk A
 HAS_DUPS = exists("workspace.vf_silver.facility_duplicate_groups")  # chunk A
-HAS_D    = exists("workspace.vf_silver.ext_facility_matches")       # chunk D
+HAS_D    = exists("workspace.vf_silver.ext_facility_matches_all")  # Task D matches with notebook 17 second-pass decisions laid over       # chunk D
 HAS_NABH_RAW  = exists("workspace.vf_bronze.ext_nabh_raw")          # Task D source detail (NABH programme and status)
 HAS_ERAKT_RAW = exists("workspace.vf_bronze.ext_eraktkosh_raw")     # Task D source detail (blood centre type)
 HAS_EXT_CLEAN = exists("workspace.vf_silver.ext_facilities_clean")  # Task D cleaned external records
@@ -259,7 +259,7 @@ __DUP_JOIN__
 # COMMAND ----------
 
 # Notebook 10 marks each match accepted / ambiguous / rejected. Only accepted matches are used.
-d_cols = [r[0] for r in spark.sql("DESCRIBE TABLE workspace.vf_silver.ext_facility_matches").collect()] if HAS_D else []
+d_cols = [r[0] for r in spark.sql("DESCRIBE TABLE workspace.vf_silver.ext_facility_matches_all").collect()] if HAS_D else []
 d_filter = "lower(CAST(match_status AS STRING)) LIKE 'accepted%'" if "match_status" in d_cols else "lower(coalesce(CAST(match_method AS STRING), '')) NOT LIKE '%ambig%'"
 d_km  = "CAST(distance_km AS DOUBLE)" if "distance_km" in d_cols else "CAST(NULL AS DOUBLE)"
 d_ref = "CAST(source_ref AS STRING)" if "source_ref" in d_cols else "CAST(NULL AS STRING)"
@@ -298,7 +298,7 @@ d_union = r"""
   SELECT m.facility_id, CAST(m.source AS STRING), CAST(m.source_record_id AS STRING), __D_KIND__, CAST(NULL AS INT), __D_LABEL__,
          CAST(NULL AS STRING), __D_KM__, CAST(m.match_score AS DOUBLE),
          concat('notebook 10 match: ', CAST(m.match_method AS STRING), ' (', __D_STATUS__, ')'), 'vf_silver.ext_facility_matches', coalesce(__D_REF__)
-  FROM workspace.vf_silver.ext_facility_matches m__D_JOINS__
+  FROM workspace.vf_silver.ext_facility_matches_all m__D_JOINS__
   WHERE m.facility_id IS NOT NULL AND __D_FILTER__
 """.replace("__D_KIND__", d_kind).replace("__D_LABEL__", d_label).replace("__D_KM__", d_km.replace("distance_km", "m.distance_km")) \
    .replace("__D_STATUS__", d_status).replace("__D_REF__", ", ".join(d_ref_parts).replace("CAST(source_ref", "CAST(m.source_ref")) \
