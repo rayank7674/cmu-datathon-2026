@@ -12,6 +12,8 @@
 # MAGIC | `vf_gold.district_context_with_rhs` | view, one row per map district | `district_context` plus the columns above |
 # MAGIC | `vf_bronze.ext_rhs_state_beds_staff_raw` | state x table x measure x column (1,692) | state beds and staff tables, long format, blanks kept |
 # MAGIC | `vf_gold.state_public_health_capacity` | one row per state (36) | government beds by facility type, PHC doctors and CHC specialists: required, in position, shortfall |
+# MAGIC | `vf_gold.critical_zones_govt_caveat` | one row per critical block and service | every critical block with the government counts for its district and the flag `govt_care_exists_not_in_our_data` |
+# MAGIC | `vf_gold.district_critical_govt_caveat` | district x service | critical blocks and people per district, with the flag, for the map |
 # MAGIC | `vf_gold.rhs_checks` | one row per check | measured validation |
 # MAGIC
 # MAGIC **Linking rule (same as notebook 11: never the name alone).** An RHS district links to a map district only when the state is the same and either the names are the same, or the RHS name is one the existing crosswalk already links (PIN-code or NFHS-5 district lists) in that state. No fuzzy matching. After that, 28 names were confirmed by hand on 2026-11-22 (clear spelling variants and renames, each recorded with its reason in `link_method`). Anything else is left unlinked and listed.
@@ -203,6 +205,43 @@ FROM r GROUP BY state
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ## Critical-area caveat: government care that our data cannot see
+# MAGIC A critical block means "far from any facility **in this dataset**". Where the block's district has no facility in our data at all but the government counts community health centres or hospitals there, the block is flagged `govt_care_exists_not_in_our_data`. The flag does not remove the block and does not say the care is near: RHS gives district counts, not locations, so no distance or catchment is drawn for those facilities.
+# MAGIC
+# MAGIC `govt_hospitals_in_district` is filled for every block, flagged or not, because government health centres exist in almost every district and most are missing from our data.
+
+# COMMAND ----------
+
+spark.sql("""
+CREATE OR REPLACE TABLE workspace.vf_gold.critical_zones_govt_caveat AS
+WITH z AS (
+  SELECT block_id, service, zone_type, latitude, longitude, population, district_id, district_name, state_name FROM workspace.vf_gold.critical_zones
+  UNION ALL
+  SELECT block_id, 'life_threatening_150km' AS service, 'critical' AS zone_type, latitude, longitude, population, district_id, district_name, state_name FROM workspace.vf_gold.critical_zones_emergency_150km)
+SELECT z.*, p.our_facilities_located AS our_facilities_in_district, p.govt_hospitals_chc_and_above AS govt_hospitals_in_district,
+       p.govt_chcs, p.govt_sub_divisional_hospitals, p.govt_district_hospitals, p.rhs_status,
+       coalesce(p.our_facilities_located = 0 AND p.govt_hospitals_chc_and_above > 0, false) AS govt_care_exists_not_in_our_data,
+       CASE WHEN p.our_facilities_located = 0 AND p.govt_hospitals_chc_and_above > 0
+            THEN concat('Government care exists, not in our data: the district has ', p.govt_hospitals_chc_and_above, ' government community health centres or hospitals (March 2022) and no facility in this dataset. Locations unknown, so distance to them is unknown.')
+            WHEN p.govt_hospitals_chc_and_above IS NULL THEN 'Government counts unknown for this district (not linked).'
+            ELSE concat('The district also has ', p.govt_hospitals_chc_and_above, ' government community health centres or hospitals (March 2022); most are not in this dataset.') END AS govt_caveat,
+       DATE'2022-03-31' AS govt_counts_as_of
+FROM z LEFT JOIN workspace.vf_gold.district_public_facilities p ON p.district_id = z.district_id
+""")
+spark.sql("""
+CREATE OR REPLACE TABLE workspace.vf_gold.district_critical_govt_caveat AS
+SELECT c.district_id, c.district_name, c.state_name, d.centre_lat, d.centre_lon, c.service,
+       count(*) AS critical_blocks, round(sum(c.population)) AS critical_people,
+       max(c.govt_hospitals_in_district) AS govt_hospitals_in_district, max(c.govt_chcs) AS govt_chcs,
+       max(c.govt_sub_divisional_hospitals) AS govt_sub_divisional_hospitals, max(c.govt_district_hospitals) AS govt_district_hospitals,
+       max(c.our_facilities_in_district) AS our_facilities_in_district, max(c.govt_care_exists_not_in_our_data) AS govt_care_exists_not_in_our_data
+FROM workspace.vf_gold.critical_zones_govt_caveat c JOIN workspace.vf_gold.district_context d ON d.district_id = c.district_id
+WHERE c.zone_type = 'critical' GROUP BY 1, 2, 3, 4, 5, 6
+""")
+
+# COMMAND ----------
+
 spark.sql("""
 CREATE OR REPLACE TABLE workspace.vf_gold.rhs_checks AS
 SELECT 1 AS n, 'RHS rows loaded' AS check_name, CAST(count(*) AS STRING) AS measured, count(*) = 737 AS passed FROM workspace.vf_bronze.ext_rhs_district_facilities_raw
@@ -227,11 +266,15 @@ UNION ALL SELECT 12, 'all-India CHC specialists: required / in position / shortf
 UNION ALL SELECT 13, 'links confirmed by hand / map districts given two RHS districts by a hand link', concat((SELECT count(*) FROM workspace.vf_gold.district_rhs_crosswalk WHERE link_method LIKE 'confirmed by hand%'), ' / ',
        (SELECT count(*) FROM (SELECT polygon_district_id FROM workspace.vf_gold.district_rhs_crosswalk WHERE link_status = 'linked' GROUP BY 1 HAVING count(*) > 1 AND sum(CAST(link_method LIKE 'confirmed by hand%' AS INT)) > 0))),
        (SELECT count(*) FROM (SELECT polygon_district_id FROM workspace.vf_gold.district_rhs_crosswalk WHERE link_status = 'linked' GROUP BY 1 HAVING count(*) > 1 AND sum(CAST(link_method LIKE 'confirmed by hand%' AS INT)) > 0)) = 0
+UNION ALL SELECT 14, 'caveat table rows = critical_zones + 150 km blocks (no block lost or doubled)', concat((SELECT count(*) FROM workspace.vf_gold.critical_zones_govt_caveat), ' vs ', (SELECT count(*) FROM workspace.vf_gold.critical_zones) + (SELECT count(*) FROM workspace.vf_gold.critical_zones_emergency_150km)),
+       (SELECT count(*) FROM workspace.vf_gold.critical_zones_govt_caveat) = (SELECT count(*) FROM workspace.vf_gold.critical_zones) + (SELECT count(*) FROM workspace.vf_gold.critical_zones_emergency_150km)
+UNION ALL SELECT 15, 'flagged blocks in a district that has a facility in our data (must be 0)', CAST(count(*) AS STRING), count(*) = 0 FROM workspace.vf_gold.critical_zones_govt_caveat WHERE govt_care_exists_not_in_our_data AND our_facilities_in_district > 0
 UNION ALL SELECT 9, 'district_context unchanged', CAST(count(*) AS STRING), count(*) = 735 FROM workspace.vf_gold.district_context
 """)
 out = {"checks": [r.asDict() for r in spark.sql("SELECT * FROM workspace.vf_gold.rhs_checks ORDER BY n").collect()],
        "issues": [r.asDict() for r in spark.sql("SELECT state, name, detail, nearest_polygon_name FROM workspace.vf_gold.district_rhs_link_issues ORDER BY 1, 2").collect()],
        "state_top": [r.asDict() for r in spark.sql("SELECT state, chc_specialists_required, chc_specialists_in_position, chc_specialists_shortfall, chc_specialists_shortfall_pct FROM workspace.vf_gold.state_public_health_capacity WHERE chc_specialists_required >= 200 ORDER BY chc_specialists_shortfall_pct DESC LIMIT 8").collect()],
+       "caveat": [r.asDict() for r in spark.sql("SELECT service, count(*) critical_blocks, round(sum(population)/1e6, 2) critical_people_m, sum(CAST(govt_care_exists_not_in_our_data AS INT)) flagged_blocks, round(sum(CASE WHEN govt_care_exists_not_in_our_data THEN population END)/1e6, 2) flagged_people_m, count(DISTINCT CASE WHEN govt_care_exists_not_in_our_data THEN district_id END) flagged_districts FROM workspace.vf_gold.critical_zones_govt_caveat WHERE zone_type = 'critical' GROUP BY 1 ORDER BY 1").collect()],
        "totals": [r.asDict() for r in spark.sql("""SELECT sum(govt_facilities_total) govt_total, sum(govt_hospitals_chc_and_above) govt_hosp, sum(our_facilities_located) ours_in_linked,
             sum(CAST(our_facilities_located = 0 AND govt_hospitals_chc_and_above > 0 AS INT)) districts_ours_zero_govt_has_hospital,
             sum(CASE WHEN our_facilities_located = 0 THEN govt_hospitals_chc_and_above END) govt_hospitals_in_those
