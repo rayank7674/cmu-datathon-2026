@@ -376,6 +376,7 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-22 | Rural Health Statistics 2021-22 loaded (notebook 18): government facility counts for 737 districts (706 linked to map districts, 31 left unlinked) and state beds and staff; `district_public_facilities`, `state_public_health_capacity`; shown in the app's Policy tab. See section 23 |
 | 2026-11-22 | 28 of the 31 unlinked RHS districts confirmed by hand (734 of 737 linked). Critical blocks in districts with government health centres or hospitals but no facility in our data are flagged (`critical_zones_govt_caveat`) and ringed on the Policy map. See sections 23 and 23.1 |
 | 2026-11-22 | Final hand check of 60 claims (20 per strength): strong 20 of 20 supported, moderate 16 of 20 (2 wrong), weak 7 of 20 (1 wrong, 8 label only); about 6% wrong when weighted. `facility_service_handcheck_final`. See section 24 |
+| 2026-11-22 | Hand review of the 289 held matches (notebook 19): 245 accepted as medium, 16 rejected, 28 left for Ishaan; decisions in `ext_match_review_decisions`, Task D tables untouched; facilities with outside evidence 1,253 to 1,455. See section 25 |
 
 ## 12. Implemented: service search tables (chunk C, notebook 09)
 
@@ -1119,6 +1120,81 @@ App: on the Policy map, flagged districts are ringed in red with the label "gove
 **What it does not measure.** "Supported" means the facility's text says it, not that the service exists or works today. Only 1 of the 60 claims had outside support for the service itself (Silchar Medical College's blood bank, listed in eRaktKosh), and none is verified. The earlier hand check is in section 12.6.
 
 **Not fixed.** The three wrong patterns are left in the data and documented here; the better-evidenced tier already excludes weak claims and plausibility-flagged ones, which removes two of the three.
+
+---
+
+## 25. Hand review of the held matches (notebook 19, 2026-11-22)
+
+Task D, matching pass 2 and the Rural Hospital Network matcher held 289 matches as `ambiguous` (NABH 187, eRaktKosh 71, Wikidata 28, Rural Hospital Network 3). Ishaan asked for them to be reviewed. Each was read by hand against the names, pincodes, addresses and map distances. Claude did the review, not a second person, so treat an accepted match as medium confidence.
+
+**Rule.** Accept only when the distinctive name words agree and the place agrees: the same pincode and town for NABH, map points within about 1 km for eRaktKosh and Wikidata. Reject a clear mismatch: a different town, a different name, or a different kind of institution (dental college against medical college). Leave anything else for Ishaan with a one-line reason. Accepted matches are stored as `accepted_medium`, never high.
+
+| Source | Accepted | Rejected | Left for Ishaan |
+| --- | ---: | ---: | ---: |
+| NABH | 173 | 4 | 10 |
+| eRaktKosh | 53 | 6 | 12 |
+| Wikidata | 19 | 4 | 5 |
+| Rural Hospital Network | 0 | 2 | 1 |
+| **Total** | **245** | **16** | **28** |
+
+**Why most NABH rows were held.** NABH lists one organisation several times, once per programme (hospital accreditation, nursing, emergency, digital health, empanelment). Task D saw equally good records with the same name and pincode and held them all. Where the records are the same organisation, one is kept per facility: the highest class present (hospital accreditation, then other accreditation, then certification, then withdrawn, then empanelment). For 66 facilities this is a different record from the one Task D listed. The reason on each row names the record kept and the other classes. Of the 173 accepted: 83 hospital accreditation, 9 other accreditation, 63 certification, 18 empanelment.
+
+**Where it is stored (nothing overwritten).**
+
+| Object | What it is |
+| --- | --- |
+| `vf_silver.ext_match_review_decisions` | One row per held match: decision, record kept, reason, who decided and when (289 rows) |
+| `vf_silver.ext_facility_matches_reviewed` | The accepted and rejected rows in Task D's column layout, `match_method = 'manual_review'` (260 rows) |
+| `vf_silver.ext_facility_matches_prereview` | View: Task D plus pass 2, as before the review |
+| `vf_silver.ext_facility_matches_all` | View read by notebooks 09 and 13: the pre-review rows with the reviewed rows laid over them |
+| `vf_silver.ext_match_review_checks` | 8 checks, all passing |
+| `medallion/match_review_decisions_2026-11-22.csv` | The same decisions as a file |
+
+Task D's `ext_facility_matches` and the pass 2 table still hold their 286 ambiguous rows. The Rural Hospital Network decisions are recorded in the decisions table only: none was accepted, so notebook 14's tables are unchanged. To change a decision, edit its line in notebook 19 and rerun 19, 09, 13, 15.
+
+**Effect (after rerunning 09, 13, 14, 15, 11, 12, 18).**
+
+| Measure | Before | After |
+| --- | ---: | ---: |
+| Facilities with accepted outside evidence | 1,253 | 1,455 |
+| Facilities whose existence an outside source supports | 3,363 | 3,449 |
+| NABH accepted matches | 986 | 1,159 |
+| eRaktKosh accepted matches | 203 | 256 |
+| Wikidata accepted matches | 160 | 179 |
+| `externally_supported` service rows | 222 | 274 |
+| Blood banks listed in the directory without a claim of their own (shown in the app) | 102 | 126 |
+| Founding years taken from the outside source on a conflict | 19 | 23 |
+| Founding years filled from an outside source | 12 | 13 |
+| `verified` rows | 0 | 0 |
+
+The four new founding-year conflicts, resolved to the outside value under the team rule: M.V. Hospital for Diabetes (1972 to 1954), Mohak Hitech Speciality Hospital (2010 to 1999), Kamla Nehru Memorial Hospital (1939 to 1931), Asian Institute of Medical Sciences Faridabad (1996 to 2010). No bed value changed. All checks pass: external evidence 15 of 15, resolved values 13 of 13, facility service 16 of 16, review 8 of 8; `quality_tests` is 21 of 22 with the same deliberate failure as before.
+
+**Left for Ishaan (28).** These stay `ambiguous` and are used nowhere.
+
+Twelve are a second row in our data for a hospital whose other row already holds the match (one outside record is kept per facility): Shushrusha Nursing Home (nabh); SAL Hospital (nabh); Nerlikar Hospital (nabh); Siddh Hospital (nabh); BRJ Ortho Center & MAK Hospital (nabh); Infinity Medisurge Centre-Multispeciality Hospital (nabh); IRIS MULTISPECIALITY HOSPITAL (nabh); Jaslok Hospital (eraktkosh); Charak Hospital (eraktkosh); Rajindra Hospital, Patiala (wikidata); Siddh Hospital (eraktkosh); Nemcare SuperSpeciality Hospital (eraktkosh). Accepting them would be safe only if the two rows are the same hospital, which is a duplicate question for silver, not a matching question.
+
+The other sixteen:
+
+| Source | Our row | Outside record | Why it is unclear |
+| --- | --- | --- | --- |
+| nabh | Fortis Hospital | Fortis Hospital | Name and pincode say Fortis Mohali, but our row's street address (Chandigarh Road, Duggri, Dhandra) is in Ludhiana |
+| nabh | Life Care Diagnostic Centre | LIFECARE DIAGNOSTIC CENTRE | Same name and pincode in Supela, Bhilai, but the street addresses differ (G.E. Road, Akash Ganga against Shivnath Complex) |
+| nabh | Vikram Hospital | Vikram Multispeciality Hospital | Vikram Hospital at Anna Nagar Main Road against the NABH record at the Sivagangai ring road site, which is matched to our 'Vikram Multispeciality Hospital' row; may be another branch |
+| wikidata | St. Martha's Hospital | St. Martha's Heart Centre | The Wikidata item is the St. Martha's Heart Centre, a unit inside the hospital, not the hospital itself |
+| wikidata | Fernandez Hospital, Hyderabad, India | Fernandez Hospital | Fernandez has several branches in Hyderabad and the points are 750 m apart |
+| eraktkosh | Sion Hospital | Sion Blood Centre | 'Sion' is also the locality name; 'Sion Blood Centre' is 1 km away and may not be the Sion Hospital blood bank |
+| wikidata | Maharaja Jitendra Narayan Medical College and Hospital | Maharaja Jitendra Narayan District Hospital | Medical college and hospital against the district hospital of the same name, 800 m apart; probably the same institution after an upgrade, not confirmed from the data |
+| wikidata | Oyster & Pearl Prime Hospital | Oyster & Pearl Hospital | 'Prime' is in our name only and the points are 800 m apart; may be another Oyster & Pearl site |
+| eraktkosh | Dispur Hospital | Dispur Blood Centre | 'Dispur' is also the locality name, and the blood centre 600 m away may be a separate organisation |
+| eraktkosh | Government Medical College, Kota | New Hospital Medical College, Kota | The record is the New Medical College Hospital blood bank; the college has two attached hospitals and our row names only the college |
+| eraktkosh | KMC Hospital, Mangalore | Kmc | The record is named only 'Kmc' and KMC has more than one hospital in Mangalore; 500 m apart |
+| eraktkosh | Vardhman Institute of Medical Sciences, Pawapuri | Blood Centre, Bhagwan Mahavir Institute of Medical Sciences Hospital Pawapuri | Different names at the same place (Vardhman against Bhagwan Mahavir Institute, Pawapuri); probably a renaming, which I could not confirm from the data |
+| eraktkosh | Rainbow Hospital | Rainbow Hospital Blood Centre | Rainbow has several branches in Hyderabad and the points are 900 m apart |
+| eraktkosh | St Joseph Hospital Quarters | St Joseph Hospital | Our row is 'St Joseph Hospital Quarters', which may be the staff quarters and not the hospital |
+| eraktkosh | MITTAL BHILAI HOSPITAL | Mittal Blood Centre | 'Mittal Blood Centre' is 900 m from Mittal Bhilai Hospital and may be a separate unit |
+| rural_hospital_network | Vishnu Dental College | Vishnu Dental Care | Same town (Bhimavaram) and same Vishnu group, but 'Dental Care' against 'Dental College'; probably the college's clinic, not confirmed |
+
+**Limits.** Same name and same pincode can still be two different hospitals in a large pincode; the NABH address was checked against our town for every accepted row and against the street where our row has one, but 9 accepted single-word names had no street words in common and rest on name, pincode and town alone. NABH validity dates are still unknown. Nothing here validates a service.
 
 ---
 
