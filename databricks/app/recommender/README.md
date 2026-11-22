@@ -105,8 +105,12 @@ What the numbers in this package do and do not mean:
 * Facilities with a suspect or invalid location are never ranked by travel time.
 * A facility is named as "stabilise here first" only if it meets all of these: it states emergency care directly (a strong or moderate claim, not a specialty tag), it is care level 3 or higher, none of its claims has a plausibility flag, and it is not single-specialty (judged by level_kind or by name, using the same pattern as notebook 04). This rule was added after a live test named an eye hospital.
 
-Tests: `python -m pytest -q tests` from the `app/` folder (74 tests, 37 of them must-never-happen cases in `tests/test_negative_cases.py`, including the known wrong-claim cases: dental delivery unit, dental trauma, DVT thrombolysis, eye-hospital emergency).
+Tests: `python -m pytest -q tests` from the `app/` folder (77 tests, 40 of them must-never-happen cases in `tests/test_negative_cases.py`, including the known wrong-claim cases: dental delivery unit, dental trauma, DVT thrombolysis, eye-hospital emergency).
 
 ## Validation without outcome labels
 
 `python validation/validate.py` (from `app/`, about 15 minutes) places 3,000 synthetic emergency patients in proportion to population, compares the pick with the nearest facility and with the nearest facility that claims every needed service, and redraws every uncertain number from its error bar to see how often the first choice changes. This is model behaviour and stability, not clinical validation. Results: `validation/RESULTS.md`, `results.json`, `stability.png`. Inputs are in `validation_data/` (an export of the app's claims query and a population-weighted sample of the access grid).
+
+### Everyday symptoms (calibration note)
+
+Fourteen everyday symptoms (cough, sore throat or cold, mild fever, headache, dizziness, vomiting, sweating, wheeze and so on), alone or in any pair, are not emergencies. Three settings make that hold: `likelihood_leak_minor` (0.10) is the chance that an everyday symptom shows up in a non-life-threatening condition that does not list it; a few rows in `knowledge/likelihood.csv` were raised for minor illness; and `red_threshold_when_unread` (0.10) keeps a more cautious line when part of the typed text could not be read. Tests loop over every everyday symptom, every pair and typed versions, and check for a nearby general first pick with no ambulance wait. These numbers are hand-set judgement, not fitted to patient outcomes.

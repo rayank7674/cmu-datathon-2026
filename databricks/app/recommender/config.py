@@ -32,6 +32,7 @@ class Config:
     # P(symptom | condition) for a pair not listed in likelihood.csv. Keeps one
     # unexpected symptom from ruling a condition out entirely.
     likelihood_leak: float = 0.02
+    likelihood_leak_minor: float | None = 0.10   # same, for an everyday symptom under a non-life-threatening condition
     # Use symptoms the person did NOT report as evidence against conditions.
     # Off by default: people list what they notice, not everything they lack.
     use_absent_symptoms: bool = False
@@ -51,6 +52,9 @@ class Config:
     # Red-flag symptoms are emergencies whatever this number is. Between telehealth_threshold and this
     # line the result is "see a doctor today" with the ordinary ranking, not the emergency screen.
     red_case_threshold: float = 0.20
+    # If part of what was typed could not be read, the cautious line applies and the case is an
+    # emergency of an unknown kind (the unread words may be the important ones).
+    red_threshold_when_unread: float = 0.10
     # Nothing recognised in what was typed: treated as an emergency of an unknown kind, ranked on these needs only.
     unclear_needs: str = "emergency;icu"
     unclear_min_rung: int = 3

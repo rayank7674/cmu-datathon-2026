@@ -164,7 +164,15 @@ def infer_conditions(s: State, cfg: Config) -> State:
     kb = s.kb
     cond = kb.conditions.copy()
     leak = kb.symptoms.set_index("symptom")["leak"].fillna(cfg.likelihood_leak)
-    L = kb.likelihood.fillna(leak).clip(1e-6, 1 - 1e-6)
+    L = kb.likelihood.copy()
+    if cfg.likelihood_leak_minor is not None:
+        # everyday symptoms (no leak of their own in symptoms.csv) turn up in minor conditions more often
+        # than in a specific emergency they are not listed for; without this, two unrelated mild
+        # complaints could only be "explained" by an emergency.
+        common = [x for x in L.columns if pd.isna(kb.symptoms.set_index("symptom")["leak"].get(x))]
+        minor = L.index.isin(cond.loc[~cond["life_threatening"], "condition"])
+        L.loc[minor, common] = L.loc[minor, common].fillna(cfg.likelihood_leak_minor)
+    L = L.fillna(leak).clip(1e-6, 1 - 1e-6)
     logp = np.log(cond["prior"].to_numpy(float))
     present = [x for x in s.symptoms if x in L.columns]
     if present:
@@ -190,8 +198,10 @@ def assess_severity(s: State, cfg: Config) -> State:
     c = s.conditions
     c["weight"] = c["severity"].astype(float) ** cfg.severity_exponent
     s.p_life_threatening = float(c.loc[c["life_threatening"], "p"].sum())
-    s.unclear = bool(cfg.unrecognised_means_hospital and not s.symptoms)
-    s.is_red = s.p_life_threatening >= cfg.red_case_threshold or bool(s.red_flags) or s.unclear
+    clear_red = s.p_life_threatening >= cfg.red_case_threshold or bool(s.red_flags)
+    part_unread = bool(s.unmatched) and s.p_life_threatening >= cfg.red_threshold_when_unread and not clear_red
+    s.unclear = bool(cfg.unrecognised_means_hospital and (not s.symptoms or part_unread))
+    s.is_red = clear_red or s.unclear
     s.log("assess_severity",
           f"P(life-threatening) = {s.p_life_threatening:.1%}; "
           + ("red case" if s.is_red else "not a red case")
@@ -861,7 +871,7 @@ def rule_close_call(s: State, cfg: Config) -> None:
 def rule_unrecognised(s: State, cfg: Config) -> None:
     if s.unclear:
         s.alert("unclear_symptoms", "warning",
-                "We could not read the symptoms"
+                ("We could not read part of what you typed" if s.symptoms else "We could not read the symptoms")
                 + (" (" + ", ".join(map(str, s.unmatched)) + ")" if s.unmatched else " because none were given")
                 + ", so this is treated as a possible emergency of an unknown kind. Please also pick symptoms from the list. "
                 "Hospitals below are ordered only on whether their text states emergency care and an ICU.")
