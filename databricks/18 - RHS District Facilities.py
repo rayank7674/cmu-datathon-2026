@@ -189,4 +189,4 @@ out = {"checks": [r.asDict() for r in spark.sql("SELECT * FROM workspace.vf_gold
             sum(CAST(our_facilities_located = 0 AND govt_hospitals_chc_and_above > 0 AS INT)) districts_ours_zero_govt_has_hospital,
             sum(CASE WHEN our_facilities_located = 0 THEN govt_hospitals_chc_and_above END) govt_hospitals_in_those
             FROM workspace.vf_gold.district_public_facilities WHERE rhs_districts_linked > 0""").collect()]}
-dbutils.notebook.exit(json.dumps(out))
+dbutils.notebook.exit(json.dumps(out, default=str))
