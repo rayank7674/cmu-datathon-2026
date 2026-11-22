@@ -93,3 +93,9 @@ Downloaded on 2026-11-22. These are in `/mnt/project-files/external-sources/raw/
 | `eraktkosh_blood_centres.csv` | 6,524 | 4,754 blood banks + 1,770 blood storage units (BSU). Category: Govt 2,982 / Private 1,804 / Charitable 1,628 / Red Cross 110. 5,267 have coordinates. Only `centre_type = Blood Bank` should verify `blood_bank`. A BSU stores blood but does not collect or test it. Phone numbers and emails were left out. |
 
 The AIKosh download is blocked because sign-up needs an Indian phone number. data.gov.in was still returning 503 at 11:10 PM ET.
+
+## Decision 2026-11-22 (Ishaan)
+AIKosh sources (National Hospital Directory, CGHS list, AIKosh blood bank and health centre directories) are dropped: the download failed and is not attainable before the deadline. eRaktKosh is already matched through the teammate's Task D (67 accepted matches, see README section 18).
+
+## Rural Hospital Network (extracted 2026-11-22)
+`raw/rural_hospital_network_profiles.csv`: 42 self-reported profiles from https://ruralhospitalnetwork.org/?page_id=1946. Explicit values only, each with its quote and page URL. 32 have beds (mostly the profile's structured "In-patient beds" field), 11 have doctor counts, and 15 have a founding year. Where a page contradicts itself (for example Shaheed Hospital: 125 in the text, 157 in the field), the structured field is used and the conflict is noted. Vague values ("1980s", "28 yrs old", organisation start years, possible vacancy counts) are left blank. There are no coordinates, so matching has to use name, state and location text. The profiles are undated, so the values sit beside the Virtue Foundation values and never replace them.
