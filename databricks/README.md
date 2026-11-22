@@ -370,6 +370,7 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-22 | App: blood bank search now also shows the 29 facilities that eRaktKosh lists as a Blood Bank without a claim of their own, labelled as a directory listing only (`app.py`, `ranking.py`). See section 18.6 |
 | 2026-11-22 | Rural Hospital Network: 42 self-reported profiles loaded (`vf_bronze.ext_rhn_profiles_raw`) and matched in notebook 14 by name, state and place: 5 accepted (medium), 3 ambiguous, 3 bed differences flagged. See section 19 |
 | 2026-11-22 | Team decision: trust the external source on value conflicts. `vf_gold.facility_resolved_values` built in notebook 15 (7 beds, 17 founding years, 2 NABH withdrawn; originals kept); app cards read it. See section 20 |
+| 2026-11-22 | Team decision: also fill missing beds, founding year and doctors from accepted outside matches (`external_gap_fill` in `facility_resolved_values`): 4 beds, 10 founding years, 1 doctor count. See section 20 |
 
 ## 12. Implemented: service search tables (chunk C, notebook 09)
 
@@ -981,7 +982,9 @@ Each changed row has `..._resolution_source = 'external'`, the outside source na
 
 `vf_gold.resolved_values_checks`: 7 of 7 pass (one row per facility, counts 7 / 17 / 2, no field with two competing outside values, originals equal silver, nothing changed without an outside value, every change has a source reference and the decision note, no missing value filled in).
 
-Not covered: the ambiguous matches stay held for review; a missing Virtue Foundation value is not filled from an outside source (Padhar Hospital's 200 beds stays beside an unknown); no clinical service is affected. A resolved value is a team decision, not a verification, and the outside values are undated.
+**Gap fill (second decision, same day: "that is one of the main reasons for the external data").** Where the Virtue Foundation value is missing, it is filled from an accepted (high or medium) match and marked `external_gap_fill`, with the source, link, match status and the decision note. Gains: beds 4 (Wikidata 3, Rural Hospital Network 1: Padhar Hospital 200), founding year 10 (all Wikidata), doctors 1 (CSI Basel Mission, 6 full-time doctors from its profile). The gains are small because only 1,144 facilities have an accepted match and most of those already had the value. NMC college founding years are not used as a hospital's founding year. `vf_doctors` and `doctors_resolved` were added. Checks are now 10 of 10.
+
+Not covered: the ambiguous matches stay held for review; no clinical service is affected. A resolved value is a team decision, not a verification, and the outside values are undated.
 
 App: the Patients and EMRs cards read the resolved values. They show a warning for the 2 facilities whose NABH accreditation is withdrawn, and a beds line where the outside figure is used. The ranking and the symptom recommender do not use beds, founding year or NABH status, so their order is unchanged.
 
