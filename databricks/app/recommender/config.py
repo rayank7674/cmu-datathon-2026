@@ -151,6 +151,14 @@ class Config:
     # A hospital whose NAME shows a focus on something else (a heart institute for a pregnancy
     # emergency, a children's hospital for a stroke) is ranked one tier lower. See steps.SPECIALTY_FOCUS.
     tier_demote_focus_mismatch: bool = True
+    # ---- non-emergencies (added 2026-11-22 after a sore throat was sent 50 minutes away) ----
+    # The weighted score favoured big hospitals for any complaint. A non-emergency is now ordered:
+    # suitable for the most likely condition first, nearest first, and the score only breaks ties.
+    nonred_nearest_suitable: bool = True
+    nonred_exclude_single_specialty: bool = True   # an IVF or dialysis centre is not 'suitable' for a sore throat
+    nonred_no_ambulance: bool = True               # the 108 ambulance is not offered for a non-emergency
+    nonred_add_walk: bool = True                   # walking is considered when it is faster (under about 1 km)
+    nonred_fallback_mode: str = "auto_taxi"
     focus_name_exempt: str = r"general|medical college|multi|super ?special"
 
     # ---- step 8: score ----------------------------------------------------

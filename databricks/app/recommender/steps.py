@@ -319,6 +319,11 @@ def travel_time(s: State, cfg: Config) -> State:
     if s.is_red:
         dropped = [m for m in modes if not tr.loc[m, "allowed_when_life_threatening"]]
         modes = [m for m in modes if m not in dropped]
+    if not s.is_red and cfg.nonred_no_ambulance and "ambulance_108" in modes:
+        dropped.append("ambulance_108 (not an emergency)")
+        modes = [m for m in modes if m != "ambulance_108"] or [cfg.nonred_fallback_mode]
+    if not s.is_red and cfg.nonred_add_walk and "walk" in tr.index and "walk" not in modes:
+        modes = modes + ["walk"]
     if not modes:
         modes = ["ambulance_108"]
     s.modes_used = modes
@@ -341,7 +346,7 @@ def travel_time(s: State, cfg: Config) -> State:
         c[f"minutes_{m}"] = tm[m]
     c["mode_label"] = c["mode"].map(tr["label"])
     s.log("travel_time", f"modes considered: {', '.join(modes)}"
-          + (f"; not used for a red case: {', '.join(dropped)}" if dropped else "")
+          + (f"; not used: {', '.join(dropped)}" if dropped else "")
           + ("; source: " + ("custom provider" if s.time_provider else "straight-line estimate")))
     return s
 
@@ -628,7 +633,7 @@ SPECIALTY_FOCUS = (
     ("cancer", r"cancer|onco", ()),
     ("brain and spine", r"neuro|spine|brain", ("stroke", "head_injury_serious", "seizure_status", "major_trauma")),
     ("bone and joint", r"ortho|\bbone\b|\bjoint", ("major_trauma", "fracture", "minor_injury")),
-    ("kidney or urology", r"kidney|nephro|\buro", ("kidney_failure",)),
+    ("kidney or urology", r"kidney|nephro|\buro|dialysis", ("kidney_failure",)),
     ("digestive", r"gastro|\bliver\b", ()),
 )
 
@@ -716,6 +721,51 @@ def evidence_tiers(s: State, cfg: Config) -> State:
     s.log("evidence_tiers", f"for {m['label'].lower()}: {n1} facilities directly state everything needed, "
           f"{n2} directly state an accepted alternative for all of it; nearest first within a tier; first: {t['name']} (tier {int(t['tier'])}, "
           f"{t['minutes']:.0f} min)")
+    return s
+
+
+# ---------------------------------------------------------------------------
+# 8e. nearest_suitable  (non-emergencies)
+# ---------------------------------------------------------------------------
+def nearest_suitable(s: State, cfg: Config) -> State:
+    """reads ranked, conditions, is_red; writes ranked.suitable and re-ranks a NON-emergency.
+
+    A non-emergency does not need the best-documented hospital, it needs the nearest place that can
+    deal with the most likely condition. Suitable = care level at or above that condition's level,
+    its text states (any strength) each service the condition needs, not a single-specialty place,
+    and its name does not point at another specialty. Order: suitable first, then nearest
+    (tier_time_band_min bands), then the weighted score as a tie-break.
+    """
+    c = s.ranked
+    if c is None or c.empty or s.is_red or not cfg.nonred_nearest_suitable:
+        return s
+    cond = s.care["conditions"]
+    m = cond.sort_values("p", ascending=False).iloc[0]
+    cl = s.care["claims_used"]
+    have = cl.groupby("facility_id")["service"].apply(set).to_dict()
+    level = pd.to_numeric(c["care_level"], errors="coerce")
+    single = single_specialty_mask(c, cfg) if cfg.nonred_exclude_single_specialty else pd.Series(False, index=c.index)
+    names = c["name"] if "name" in c else pd.Series("", index=c.index)
+    ok, why = [], []
+    for fid, lvl, sg, nm in zip(c["facility_id"], level, single, names):
+        h = have.get(fid, set())
+        missing = [grp[0][0] for grp in m["needs"] if not any(g in h for g, _ in grp)]
+        fm = focus_mismatch(nm, m["condition"], cfg) if cfg.tier_demote_focus_mismatch else ""
+        reason = ("it is a single-specialty facility" if sg else
+                  f"its name suggests a {fm} hospital" if fm else
+                  "its care level is unknown or below what this needs" if pd.isna(lvl) or lvl < m["min_rung"] else
+                  f"its text does not mention {', '.join(missing)}" if missing else "")
+        ok.append(not reason); why.append(reason)
+    c = c.copy()
+    c["suitable"], c["unsuitable_why"] = ok, why
+    c["_band"] = np.floor(c["minutes"].to_numpy(float) / max(cfg.tier_time_band_min, 1e-9))
+    c = c.sort_values(["suitable", "_band", "score", "minutes"], ascending=[False, True, False, True]).drop(columns="_band")
+    c["rank"] = np.arange(1, len(c) + 1)
+    s.ranked = c
+    s.care["main_nonurgent"] = m["condition"]
+    t = c.iloc[0]
+    s.log("nearest_suitable", f"not an emergency: most likely {m['label'].lower()}; {int(sum(ok))} suitable facilities, "
+          f"nearest first; first: {t['name']} ({t['minutes']:.0f} min)")
     return s
 
 
@@ -850,6 +900,11 @@ def _why_lower(s: State, idx, top_idx) -> str:
             miss = ", ".join(a["missing"]) or "the needed care level"
             return f"its text does not directly state everything needed ({miss})"
         return "being further away" if a["minutes"] > b["minutes"] else "weaker documentation at a similar distance"
+    if "suitable" in s.ranked:
+        a, b = s.ranked.loc[idx], s.ranked.loc[top_idx]
+        if not a["suitable"]:
+            return f"not being a good fit ({a['unsuitable_why']})"
+        return "being further away" if a["minutes"] > b["minutes"] else "a similar distance with less on record"
     cond = s.care["conditions"]
     w = (cond["p"] * cond["weight"]).to_numpy(float)
     w = w / max(w.sum(), 1e-12)
@@ -919,6 +974,16 @@ def explain(s: State, cfg: Config) -> State:
                         + (f"Not stated directly: {', '.join(r['missing'])}. " if len(r["missing"]) else "")
                         + (f"Ranked one tier lower because its name suggests a {r['focus_note']} hospital: confirm it takes this emergency. " if r.get("focus_note") else "")
                         + "Nothing here is independently verified: call ahead, and let the 108 crew decide.")
+        elif "suitable" in s.ranked:
+            mm = next((p for p in parts if p["condition"] == s.care.get("main_nonurgent")), main)
+            main = mm
+            needs_txt = "; ".join(f"{x['service']} ({x['claim_strength'] or 'not mentioned'})" for x in mm["services"])
+            sentence = (head + f"Not an emergency: for {mm['label'].lower()}, the most likely cause, "
+                        + ("no special service is needed" if not mm["services"] else f"its text mentions {needs_txt}")
+                        + f". Care level {lvl}. "
+                        + ("Listed in order of distance among places that fit." if r["suitable"]
+                           else f"Not a good fit: {r['unsuitable_why']}.")
+                        + " Not independently verified: call ahead.")
         else:
             sentence = (head + f"For the most important possibility, {main['label'].lower()}, its text mentions "
                         f"{svc_txt}; care level {lvl}."

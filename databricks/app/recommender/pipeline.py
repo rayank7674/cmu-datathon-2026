@@ -18,7 +18,7 @@ import pandas as pd
 
 from .config import Config
 from .steps import (State, assess_severity, care_probability, emergency_eligibility, evidence_tiers, explain,
-                    find_candidates,
+                    find_candidates, nearest_suitable,
                     infer_conditions, nearer_on_ties, normalise_symptoms, safety_rules, score, travel_burden, travel_time,
                     triage_gate)
 
@@ -35,6 +35,7 @@ PIPELINE = [
     travel_burden,        # 8b minus a travel penalty for non-urgent cases
     nearer_on_ties,       # 8c (only if tiers are off) near-tied scores -> the nearer hospital first
     evidence_tiers,       # 8d red case: evidence tier first, then nearest; the score only breaks ties
+    nearest_suitable,     # 8e not an emergency: nearest place that fits the most likely condition
     safety_rules,         # 9  108/102 first, stabilise and transfer, ...
     explain,              # 10 per-condition breakdown, quotes, why others lower
 ]

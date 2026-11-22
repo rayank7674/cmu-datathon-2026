@@ -21,6 +21,8 @@ r.trace                # one line per step, in order: what it did and how long i
 
 **What counts as an emergency (changed after the test report, 2026-11-22).** A case is an emergency if it has a red-flag symptom, or the chance of a life-threatening cause is 20% or more (`red_case_threshold`; it was 5%, which made a sore throat an emergency: 14 of 15 non-emergency test cases got the red screen, now 3 of 15, at the cost of 1 of 39 test emergencies becoming "see a doctor today"). From 5% to 20% the result is "see a doctor today" with the ordinary ranking. Under 5%, and only if every phrase was understood, it is telehealth first. If nothing typed was understood, the case is an **emergency of an unknown kind**: hospitals are judged only on emergency care and ICU (`unclear_needs`) and the screen asks the person to use the symptom list. Test scripts and results: `validation/rigor/`.
 
+**Non-emergencies (changed 2026-11-22 after a sore throat was sent 50 minutes away).** The weighted score favoured big hospitals for any complaint, and the trip was timed with the ambulance wait. A non-emergency is now ordered by step `nearest_suitable`: places that fit the most likely condition first (care level at or above what it needs, its text mentions any needed service, not single-specialty, name not pointing at another specialty), then nearest first; the score only breaks ties. The 108 ambulance is not used to time the trip, and walking is considered when it is faster (`nonred_*` in config.py).
+
 No formula decides an emergency (a "red case"). The order is:
 
 1. **Call 108 / 102 or 112 first.** The crew decides where to go; the list is for them and the caller.
@@ -103,7 +105,7 @@ What the numbers in this package do and do not mean:
 * Facilities with a suspect or invalid location are never ranked by travel time.
 * A facility is named as "stabilise here first" only if it meets all of these: it states emergency care directly (a strong or moderate claim, not a specialty tag), it is care level 3 or higher, none of its claims has a plausibility flag, and it is not single-specialty (judged by level_kind or by name, using the same pattern as notebook 04). This rule was added after a live test named an eye hospital.
 
-Tests: `python -m pytest -q tests` from the `app/` folder (70 tests, 33 of them must-never-happen cases in `tests/test_negative_cases.py`, including the known wrong-claim cases: dental delivery unit, dental trauma, DVT thrombolysis, eye-hospital emergency).
+Tests: `python -m pytest -q tests` from the `app/` folder (74 tests, 37 of them must-never-happen cases in `tests/test_negative_cases.py`, including the known wrong-claim cases: dental delivery unit, dental trauma, DVT thrombolysis, eye-hospital emergency).
 
 ## Validation without outcome labels
 
