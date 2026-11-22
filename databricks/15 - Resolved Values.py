@@ -10,7 +10,9 @@
 # MAGIC - founding year: the 17 Wikidata contradictions from notebook 13
 # MAGIC - NABH: the 2 facilities whose own text claims accreditation while the matched directory record is withdrawn; the directory wins
 # MAGIC
-# MAGIC Not in scope: ambiguous matches (still held for review), filling a missing Virtue Foundation value from an outside source, and any clinical service. A resolved value is a team decision, not a verification.
+# MAGIC - gap fill (second decision, same day): where the Virtue Foundation value is missing, beds, founding year and full-time doctors are filled from an accepted (high or medium) match, marked `external_gap_fill`. NMC college founding years are never used as a hospital's founding year.
+# MAGIC
+# MAGIC Not in scope: ambiguous matches (still held for review) and any clinical service. A resolved value is a team decision, not a verification.
 
 # COMMAND ----------
 
@@ -28,28 +30,57 @@ b AS (SELECT facility_id, max(CAST(external_value AS INT)) AS v, max(source) AS 
 y AS (SELECT facility_id, max(CAST(external_value AS INT)) AS v, max(source) AS src, max(source_ref) AS ref, count(*) AS n FROM c WHERE conflict_type = 'founding_year_differs' GROUP BY 1),
 nb AS (SELECT facility_id, max(external_value) AS v, max(source_ref) AS ref FROM workspace.vf_gold.facility_external_conflicts
        WHERE conflict_type = 'nabh_claim_vs_directory' AND is_contradiction GROUP BY 1),
-l AS (SELECT facility_id, nabh_claimed FROM workspace.vf_gold.facility_level_v2)
+l AS (SELECT facility_id, nabh_claimed FROM workspace.vf_gold.facility_level_v2),
+-- gap fill: explicit values on accepted (high or medium) matches only
+g AS (
+  SELECT facility_id, source, 'beds' AS field, CAST(ext_beds AS INT) AS v, source_ref AS ref, match_status FROM workspace.vf_gold.facility_external_evidence
+  WHERE ext_beds IS NOT NULL AND match_status IN ('accepted_high', 'accepted_medium')
+  UNION ALL SELECT facility_id, source, 'year', CAST(ext_inception_year AS INT), source_ref, match_status FROM workspace.vf_gold.facility_external_evidence
+  WHERE ext_inception_year IS NOT NULL AND match_status IN ('accepted_high', 'accepted_medium')
+  UNION ALL SELECT facility_id, source, 'beds', rhn_beds, source_ref, match_status FROM workspace.vf_gold.facility_rhn_evidence WHERE rhn_beds IS NOT NULL
+  UNION ALL SELECT facility_id, source, 'year', rhn_founding_year, source_ref, match_status FROM workspace.vf_gold.facility_rhn_evidence WHERE rhn_founding_year IS NOT NULL
+  UNION ALL SELECT facility_id, source, 'doctors', rhn_doctors_fulltime, source_ref, match_status FROM workspace.vf_gold.facility_rhn_evidence WHERE rhn_doctors_fulltime IS NOT NULL
+),
+gg AS (SELECT facility_id, field, max_by(v, match_status = 'accepted_high') AS v, max_by(source, match_status = 'accepted_high') AS src,
+              max_by(ref, match_status = 'accepted_high') AS ref, max_by(match_status, match_status = 'accepted_high') AS ms,
+              count(DISTINCT v) AS n_values FROM g WHERE v > 0 GROUP BY 1, 2),
+gb AS (SELECT * FROM gg WHERE field = 'beds'), gy AS (SELECT * FROM gg WHERE field = 'year'), gd AS (SELECT * FROM gg WHERE field = 'doctors')
 SELECT f.facility_id, f.name,
        f.capacity_beds AS vf_beds,
-       coalesce(b.v, f.capacity_beds) AS beds_resolved,
-       CASE WHEN b.v IS NOT NULL THEN 'external' WHEN f.capacity_beds IS NOT NULL THEN 'virtue_foundation' END AS beds_resolution_source,
-       b.src AS beds_external_source, b.ref AS beds_external_ref,
+       coalesce(b.v, f.capacity_beds, gb.v) AS beds_resolved,
+       CASE WHEN b.v IS NOT NULL THEN 'external' WHEN f.capacity_beds IS NOT NULL THEN 'virtue_foundation' WHEN gb.v IS NOT NULL THEN 'external_gap_fill' END AS beds_resolution_source,
+       CASE WHEN b.v IS NOT NULL THEN b.src WHEN f.capacity_beds IS NULL THEN gb.src END AS beds_external_source,
+       CASE WHEN b.v IS NOT NULL THEN b.ref WHEN f.capacity_beds IS NULL THEN gb.ref END AS beds_external_ref,
+       CASE WHEN b.v IS NULL AND f.capacity_beds IS NULL THEN gb.ms END AS beds_fill_match_confidence,
        f.year_established AS vf_year_founded,
-       coalesce(y.v, f.year_established) AS year_founded_resolved,
-       CASE WHEN y.v IS NOT NULL THEN 'external' WHEN f.year_established IS NOT NULL THEN 'virtue_foundation' END AS year_founded_resolution_source,
-       y.src AS year_founded_external_source, y.ref AS year_founded_external_ref,
+       coalesce(y.v, f.year_established, gy.v) AS year_founded_resolved,
+       CASE WHEN y.v IS NOT NULL THEN 'external' WHEN f.year_established IS NOT NULL THEN 'virtue_foundation' WHEN gy.v IS NOT NULL THEN 'external_gap_fill' END AS year_founded_resolution_source,
+       CASE WHEN y.v IS NOT NULL THEN y.src WHEN f.year_established IS NULL THEN gy.src END AS year_founded_external_source,
+       CASE WHEN y.v IS NOT NULL THEN y.ref WHEN f.year_established IS NULL THEN gy.ref END AS year_founded_external_ref,
+       CASE WHEN y.v IS NULL AND f.year_established IS NULL THEN gy.ms END AS year_founded_fill_match_confidence,
+       f.number_doctors AS vf_doctors,
+       coalesce(f.number_doctors, gd.v) AS doctors_resolved,
+       CASE WHEN f.number_doctors IS NOT NULL THEN 'virtue_foundation' WHEN gd.v IS NOT NULL THEN 'external_gap_fill' END AS doctors_resolution_source,
+       CASE WHEN f.number_doctors IS NULL THEN gd.src END AS doctors_external_source,
+       CASE WHEN f.number_doctors IS NULL THEN gd.ref END AS doctors_external_ref,
+       CASE WHEN f.number_doctors IS NULL AND gd.v IS NOT NULL THEN 'full-time doctors as stated on the profile' END AS doctors_note,
+       greatest(CASE WHEN f.capacity_beds IS NULL THEN coalesce(gb.n_values, 0) ELSE 0 END, CASE WHEN f.year_established IS NULL THEN coalesce(gy.n_values, 0) ELSE 0 END) AS fill_competing_values,
        l.nabh_claimed AS vf_nabh_claimed,
        CASE WHEN nb.v IS NOT NULL THEN 'withdrawn' END AS nabh_status_resolved,
        CASE WHEN nb.v IS NOT NULL THEN 'external' END AS nabh_resolution_source,
        nb.v AS nabh_external_value, nb.ref AS nabh_external_ref,
        (b.v IS NOT NULL OR y.v IS NOT NULL OR nb.v IS NOT NULL) AS any_value_resolved_from_external,
-       CASE WHEN b.v IS NOT NULL OR y.v IS NOT NULL OR nb.v IS NOT NULL THEN '{BY}' END AS resolution_by,
+       ((f.capacity_beds IS NULL AND gb.v IS NOT NULL) OR (f.year_established IS NULL AND gy.v IS NOT NULL) OR (f.number_doctors IS NULL AND gd.v IS NOT NULL)) AS any_gap_filled_from_external,
+       CASE WHEN b.v IS NOT NULL OR y.v IS NOT NULL OR nb.v IS NOT NULL OR (f.capacity_beds IS NULL AND gb.v IS NOT NULL) OR (f.year_established IS NULL AND gy.v IS NOT NULL) OR (f.number_doctors IS NULL AND gd.v IS NOT NULL) THEN '{BY}' END AS resolution_by,
        coalesce(b.n, 0) AS beds_conflict_rows, coalesce(y.n, 0) AS year_conflict_rows
 FROM workspace.vf_silver.facilities f
 LEFT JOIN b ON b.facility_id = f.facility_id
 LEFT JOIN y ON y.facility_id = f.facility_id
 LEFT JOIN nb ON nb.facility_id = f.facility_id
 LEFT JOIN l ON l.facility_id = f.facility_id
+LEFT JOIN gb ON gb.facility_id = f.facility_id
+LEFT JOIN gy ON gy.facility_id = f.facility_id
+LEFT JOIN gd ON gd.facility_id = f.facility_id
 """)
 
 # COMMAND ----------
@@ -62,10 +93,17 @@ UNION ALL SELECT 2, 'beds resolved from external / founding year / NABH', concat
        sum(CAST(beds_resolution_source = 'external' AS INT)) = 7 AND sum(CAST(year_founded_resolution_source = 'external' AS INT)) = 17 AND sum(CAST(nabh_resolution_source = 'external' AS INT)) = 2 FROM workspace.vf_gold.facility_resolved_values
 UNION ALL SELECT 3, 'facilities with two different external values for one field', CAST(count(*) AS STRING), count(*) = 0 FROM workspace.vf_gold.facility_resolved_values WHERE beds_conflict_rows > 1 OR year_conflict_rows > 1
 UNION ALL SELECT 4, 'original values still equal silver', CAST(count(*) AS STRING), count(*) = 0 FROM workspace.vf_gold.facility_resolved_values r JOIN workspace.vf_silver.facilities f USING (facility_id) WHERE NOT (r.vf_beds <=> f.capacity_beds AND r.vf_year_founded <=> f.year_established)
-UNION ALL SELECT 5, 'resolved differs from original only where an external value was applied', CAST(count(*) AS STRING), count(*) = 0 FROM workspace.vf_gold.facility_resolved_values WHERE (NOT beds_resolved <=> vf_beds AND beds_resolution_source <> 'external') OR (NOT year_founded_resolved <=> vf_year_founded AND year_founded_resolution_source <> 'external')
-UNION ALL SELECT 6, 'externally resolved rows missing source ref or decision note', CAST(count(*) AS STRING), count(*) = 0 FROM workspace.vf_gold.facility_resolved_values WHERE any_value_resolved_from_external AND (resolution_by IS NULL OR coalesce(beds_external_ref, year_founded_external_ref, nabh_external_ref) IS NULL)
-UNION ALL SELECT 7, 'missing original values filled from external (must be 0)', CAST(count(*) AS STRING), count(*) = 0 FROM workspace.vf_gold.facility_resolved_values WHERE (vf_beds IS NULL AND beds_resolved IS NOT NULL) OR (vf_year_founded IS NULL AND year_founded_resolved IS NOT NULL)
+UNION ALL SELECT 5, 'resolved differs from original only where an external value was applied', CAST(count(*) AS STRING), count(*) = 0 FROM workspace.vf_gold.facility_resolved_values WHERE (NOT beds_resolved <=> vf_beds AND beds_resolution_source NOT IN ('external', 'external_gap_fill')) OR (NOT year_founded_resolved <=> vf_year_founded AND year_founded_resolution_source NOT IN ('external', 'external_gap_fill')) OR (vf_beds IS NOT NULL AND beds_resolution_source = 'external_gap_fill') OR (vf_year_founded IS NOT NULL AND year_founded_resolution_source = 'external_gap_fill') OR (vf_doctors IS NOT NULL AND NOT doctors_resolved <=> vf_doctors)
+UNION ALL SELECT 6, 'externally resolved rows missing source ref or decision note', CAST(count(*) AS STRING), count(*) = 0 FROM workspace.vf_gold.facility_resolved_values WHERE (any_value_resolved_from_external OR any_gap_filled_from_external) AND (resolution_by IS NULL OR coalesce(beds_external_ref, year_founded_external_ref, nabh_external_ref, doctors_external_ref) IS NULL)
+UNION ALL SELECT 7, 'gaps filled from accepted matches: beds / founding year / doctors', concat(sum(CAST(beds_resolution_source = 'external_gap_fill' AS INT)), ' / ', sum(CAST(year_founded_resolution_source = 'external_gap_fill' AS INT)), ' / ', sum(CAST(doctors_resolution_source = 'external_gap_fill' AS INT))), true FROM workspace.vf_gold.facility_resolved_values
+UNION ALL SELECT 8, 'gap fills where two outside sources give different values', CAST(count(*) AS STRING), count(*) = 0 FROM workspace.vf_gold.facility_resolved_values WHERE fill_competing_values > 1 AND any_gap_filled_from_external
+UNION ALL SELECT 9, 'gap fills from a non-accepted match or from NMC (must be 0)', CAST(count(*) AS STRING), count(*) = 0 FROM workspace.vf_gold.facility_resolved_values
+          WHERE coalesce(beds_fill_match_confidence, 'accepted_medium') NOT IN ('accepted_high', 'accepted_medium') OR coalesce(year_founded_fill_match_confidence, 'accepted_medium') NOT IN ('accepted_high', 'accepted_medium')
+             OR (year_founded_resolution_source = 'external_gap_fill' AND year_founded_external_source NOT IN ('wikidata', 'rural_hospital_network'))
+UNION ALL SELECT 10, 'filled founding years outside 1700 to 2026', CAST(count(*) AS STRING), count(*) = 0 FROM workspace.vf_gold.facility_resolved_values WHERE year_founded_resolution_source = 'external_gap_fill' AND NOT year_founded_resolved BETWEEN 1700 AND 2026
 """)
 out = {"checks": [r.asDict() for r in spark.sql("SELECT * FROM workspace.vf_gold.resolved_values_checks ORDER BY n").collect()],
-       "changed": [r.asDict() for r in spark.sql("SELECT name, vf_beds, beds_resolved, beds_external_source, vf_year_founded, year_founded_resolved, year_founded_external_source, nabh_status_resolved FROM workspace.vf_gold.facility_resolved_values WHERE any_value_resolved_from_external ORDER BY name").collect()]}
+       "changed": [r.asDict() for r in spark.sql("SELECT name, vf_beds, beds_resolved, beds_external_source, vf_year_founded, year_founded_resolved, year_founded_external_source, nabh_status_resolved FROM workspace.vf_gold.facility_resolved_values WHERE any_value_resolved_from_external ORDER BY name").collect()],
+       "filled": [r.asDict() for r in spark.sql("SELECT beds_external_source, year_founded_external_source, doctors_external_source, beds_resolution_source b, year_founded_resolution_source y, doctors_resolution_source d, count(*) n FROM workspace.vf_gold.facility_resolved_values WHERE any_gap_filled_from_external GROUP BY ALL").collect()],
+       "filled_examples": [r.asDict() for r in spark.sql("SELECT name, vf_beds, beds_resolved, beds_external_source, vf_year_founded, year_founded_resolved, year_founded_external_source, vf_doctors, doctors_resolved FROM workspace.vf_gold.facility_resolved_values WHERE any_gap_filled_from_external ORDER BY beds_resolution_source = 'external_gap_fill' DESC, name LIMIT 12").collect()]}
 dbutils.notebook.exit(json.dumps(out))
