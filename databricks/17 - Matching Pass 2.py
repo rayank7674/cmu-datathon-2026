@@ -9,6 +9,7 @@
 # MAGIC - Noise words are dropped from both names: hospital, blood, centre, bank, research, ltd, trust, speciality words and similar, plus the facility's own city, district and state.
 # MAGIC - `accepted_medium` (never high): the remaining words are the same on both sides (a spelling difference of one or two letters is allowed), and the two points are within 0.5 km, or within 0.3 km when only one distinctive word is left.
 # MAGIC - `ambiguous` (review only): within 1 km and at least 60% of the words shared, but not the same.
+# MAGIC - If each name carries a different place word ("... Dausa" against "... Baran"), the pair is ambiguous however close the points are.
 # MAGIC - One outside record per facility and one facility per outside record; ties become ambiguous. Facilities that Task D already matched for that source are skipped.
 # MAGIC - OpenStreetMap is not in this pass: it was matched in notebook 06 and its export has no bed counts (the capacity column is empty for all 139,664 rows).
 
@@ -20,7 +21,7 @@ import pandas as pd
 NOISE = {"hospital", "hospitals", "blood", "centre", "center", "bank", "bsu", "ltd", "limited", "pvt", "private", "trust", "society",
          "the", "and", "of", "for", "dept", "department", "transfusion", "medicine", "research", "multi", "super", "speciality",
          "specialty", "multispeciality", "multispecialty", "superspeciality", "superspecialty", "india", "unit", "a", "ms", "m", "s",
-         "govt", "government", "new", "sri", "shri", "sree", "dr"}
+         "govt", "government", "sri", "shri", "sree", "dr"}
 
 
 def toks(s, place=()):
@@ -73,6 +74,12 @@ for _, r in cand.iterrows():
     if not a or not b:        # a name that is only a place plus "hospital": compare without dropping the place
         a, b = toks(r["vf_name"]), toks(r["ext_name"])
     equal, share = compare(a, b)
+    # a place named on one side that the other side contradicts with a different place (e.g. "... Dausa" against "... Baran")
+    ra, rb = set(toks(r["vf_name"])), set(toks(r["ext_name"]))
+    pa, pb = (ra & place) - rb, (rb & place) - ra
+    place_conflict = bool(pa) and bool(pb)
+    if place_conflict:
+        equal = False
     d = float(r["distance_km"])
     if equal and (d <= 0.3 or (len(a) >= 2 and d <= 0.5)):
         status, reason, conf = "accepted_medium", "second pass: same distinctive name words within %.2f km; identity only, never validates a service" % d, "medium"
