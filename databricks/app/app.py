@@ -700,6 +700,7 @@ BLUE_RAMP = PALETTES["Indigo"]          # the active ramp; tab_policy swaps it w
 ACCENTS = {"Indigo": (245, 166, 35), "Ocean": (240, 110, 80), "Teal": (236, 112, 84), "Plum": (24, 170, 170)}
 ACCENT = ACCENTS["Indigo"]
 # Facility dots are dark with a thin pale ring. (White dots merged into white patches where facilities cluster.)
+GOVT_RING = [226, 74, 51, 255]
 FAC_FILL, FAC_LINE = [28, 28, 38, 235], [*BLUE_RAMP[-1], 255]
 GRADIENT_MAX_KM = 200.0
 GRADIENT_POWER = 0.7     # 1 = even fade; lower = faster fade near the facility
@@ -779,6 +780,25 @@ def load_critical_blocks(service: str) -> pd.DataFrame:
     if not parts:
         return pd.DataFrame(columns=["latitude", "longitude"])
     return pd.concat(parts, ignore_index=True).apply(pd.to_numeric, errors="coerce").dropna()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_govt_caveat(service: str) -> pd.DataFrame:
+    """Districts with critical blocks, no facility in this dataset, and government health centres or hospitals
+    counted by Rural Health Statistics 2021-22. One row per district; counts only, no locations."""
+    df = query(f"""
+        SELECT district_id, max(district_name) AS district_name, max(state_name) AS state_name,
+               max(centre_lat) AS centre_lat, max(centre_lon) AS centre_lon,
+               max(critical_blocks) AS critical_blocks, max(critical_people) AS critical_people,
+               max(govt_hospitals_in_district) AS govt_hospitals, max(govt_chcs) AS govt_chcs,
+               max(govt_sub_divisional_hospitals) AS govt_sdh, max(govt_district_hospitals) AS govt_dh
+        FROM {GOLD}.district_critical_govt_caveat
+        WHERE govt_care_exists_not_in_our_data AND service IN (:s, 'life_threatening_150km')
+        GROUP BY district_id
+    """, {"s": service})
+    for col in df.columns[3:]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df.dropna(subset=["centre_lat", "centre_lon"])
 
 
 @st.cache_data(ttl=3600, show_spinner="Drawing critical-area stripes...", max_entries=40)
@@ -958,6 +978,22 @@ def tab_policy(claims, facilities, districts, access):
                           get_fill_color=FAC_FILL, get_line_color=FAC_LINE, stroked=True, line_width_min_pixels=1,
                           radius_min_pixels=2, radius_max_pixels=6, get_radius=900, pickable=True)
     CRIT_CHIP = ("<span style='margin-left:10px'></span>" + stripe_chip()) if stripes is not None else ""
+    govt = optional(lambda: load_govt_caveat(service)) if show_crit else None
+    govt_layer = None
+    if govt is not None and len(govt):
+        govt = govt.copy()
+        govt["tip"] = govt.apply(lambda r: (
+            f"{r['district_name']}, {r['state_name']}\nGovernment care exists, not in our data:\n"
+            f"{int(r['govt_hospitals'])} government health centres or hospitals (March 2022: "
+            f"{int(r['govt_chcs'])} CHCs, {int(r['govt_sdh'])} sub-divisional, {int(r['govt_dh'])} district hospitals).\n"
+            "This dataset lists no facility in the district. Locations unknown."), axis=1)
+        govt_layer = pdk.Layer("ScatterplotLayer", govt[["centre_lat", "centre_lon", "tip"]],
+                               get_position="[centre_lon, centre_lat]", get_fill_color=[255, 255, 255, 40],
+                               get_line_color=GOVT_RING, stroked=True, filled=True, line_width_min_pixels=2.5,
+                               get_radius=14000, radius_min_pixels=6, radius_max_pixels=16, pickable=True)
+        CRIT_CHIP += ("<span style='margin-left:10px'></span><span style='display:inline-block;width:11px;height:11px;"
+                      f"border-radius:50%;border:2.5px solid rgb({GOVT_RING[0]},{GOVT_RING[1]},{GOVT_RING[2]});vertical-align:middle'></span> "
+                      "government care exists, not in our data")
     if view == "Catchments (Voronoi)":
         c = cat.copy()
         c["tip"] = c.apply(lambda r: (f"Nearest listed facility: {r['facility_name']}\n"
@@ -983,8 +1019,16 @@ def tab_policy(claims, facilities, districts, access):
             layers.append(pdk.Layer("BitmapLayer", image=pdk.types.String(stripes[0]), bounds=stripes[1], opacity=1.0))
         if show_fac:
             layers.append(fac_layer)
+        if govt_layer is not None:
+            layers.append(govt_layer)
         st.pydeck_chart(pdk.Deck(layers=layers, tooltip={"text": "{tip}"},
                                  initial_view_state=pdk.ViewState(latitude=22.5, longitude=80.5, zoom=3.9)), height=620)
+        if govt_layer is not None:
+            st.warning(f"**Not the same as no care.** {len(govt)} districts with striped critical areas have no facility in "
+                       f"this dataset, yet the government counts {int(govt['govt_hospitals'].sum()):,} community health "
+                       "centres or hospitals in them (Rural Health Statistics, March 2022). They are ringed on the map. "
+                       "The report gives counts, not locations, so we cannot say how far those facilities are from anyone, "
+                       "and no catchment is drawn for them.", icon="⚠️")
         if shade == "Distance from its facility":
             gradient_legend(FAC_CHIP + CRIT_CHIP)
         elif shade == "Area":

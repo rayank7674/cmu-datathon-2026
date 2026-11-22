@@ -374,6 +374,7 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-22 | Task B text extraction audited (notebook 16): raw error about 36% beds, 27% founding year, 5% doctors; only plain statements kept and used as `text_gap_fill` (54 beds, 73 years, 103 doctor counts). See section 21 |
 | 2026-11-22 | Matching second pass (notebook 17): 136 eRaktKosh and 27 Wikidata matches added as medium, 94 ambiguous; view `ext_facility_matches_all` read by notebooks 09 and 13; facilities with outside evidence 1,144 to 1,253. See section 22 |
 | 2026-11-22 | Rural Health Statistics 2021-22 loaded (notebook 18): government facility counts for 737 districts (706 linked to map districts, 31 left unlinked) and state beds and staff; `district_public_facilities`, `state_public_health_capacity`; shown in the app's Policy tab. See section 23 |
+| 2026-11-22 | 28 of the 31 unlinked RHS districts confirmed by hand (734 of 737 linked). Critical blocks in districts with government health centres or hospitals but no facility in our data are flagged (`critical_zones_govt_caveat`) and ringed on the Policy map. See sections 23 and 23.1 |
 
 ## 12. Implemented: service search tables (chunk C, notebook 09)
 
@@ -1072,6 +1073,29 @@ All 163 new accepted pairs were read by hand; two wrong ones in the first run (a
 **Reading it.** Government counts and our facilities are different sets, so one is not a share of the other. The comparison measures how much public care our data cannot see, which matters most for the critical-area maps: a district shown as far from care may have a government hospital that is not in the dataset. Counts are for March 2022 and district boundaries have changed since. A blank staff value means surplus or not available, never zero.
 
 **App.** Policy tab, expander "Government facilities beside this dataset": the summary above, a district table, and the state specialist table.
+
+### 23.1 Critical-area caveat: government care that our data cannot see
+
+A critical block means "far from any facility in this dataset". Where the block's district has no facility in our data at all, but the government counts community health centres or hospitals there, the block is flagged `govt_care_exists_not_in_our_data` so the area is not presented as having no care. The flag does not remove the block and does not say the care is near: the report gives district counts, not locations, so no distance and no catchment is drawn for those facilities.
+
+- `vf_gold.critical_zones_govt_caveat`: every block of `critical_zones` and `critical_zones_emergency_150km` (202,839 rows) with the government counts for its district, the flag and a plain-language `govt_caveat`. `govt_hospitals_in_district` is filled for all blocks, flagged or not, because government health centres exist in almost every district and most are missing from our data.
+- `vf_gold.district_critical_govt_caveat`: critical blocks and people per district and service, with the flag, for the map.
+
+| Rule | Critical blocks | People (million) | In flagged districts: blocks | People (million) | Districts |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 150 km life-threatening rule | 9,753 | 5.87 | 8,117 | 3.06 | 37 |
+| Emergency | 12,901 | 163.96 | 3,259 | 35.99 | 68 |
+| Obstetric delivery | 12,021 | 156.19 | 3,274 | 36.82 | 68 |
+| ICU | 15,332 | 202.39 | 3,605 | 41.09 | 69 |
+| NICU | 18,010 | 254.27 | 3,665 | 42.01 | 68 |
+| Trauma | 18,676 | 265.99 | 3,740 | 43.03 | 70 |
+| Dialysis | 20,142 | 296.38 | 3,732 | 43.28 | 69 |
+| Blood bank | 20,775 | 304.63 | 3,767 | 43.19 | 69 |
+| C-section | 23,361 | 356.50 | 3,932 | 46.67 | 70 |
+
+So 83% of the blocks under the 150 km rule, and about half of the people in them, sit in districts where the government runs health centres or hospitals that this dataset does not list. Whether those can handle a life-threatening emergency is unknown.
+
+App: on the Policy map, flagged districts are ringed in red with the label "government care exists, not in our data" and a hover note giving the counts; a warning under the map states the number of ringed districts and government facilities for the chosen service. `rhs_checks` is now 15 of 15.
 
 ---
 
