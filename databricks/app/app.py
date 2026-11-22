@@ -582,7 +582,11 @@ PALETTES = {      # dark -> pale; the pale end is still clearly tinted, never wh
              (104, 188, 176), (142, 206, 196), (176, 222, 213)],
 }
 BLUE_RAMP = PALETTES["Indigo"]          # the active ramp; tab_policy swaps it when the user picks another
-FAC_FILL, FAC_LINE = [255, 255, 255, 240], [*BLUE_RAMP[0], 255]
+# Stripe colour per palette: a hue the ramp does not contain, so stripes never read as shading.
+ACCENTS = {"Indigo": (245, 166, 35), "Ocean": (240, 110, 80), "Teal": (236, 112, 84), "Plum": (24, 170, 170)}
+ACCENT = ACCENTS["Indigo"]
+# Facility dots are dark with a thin pale ring. (White dots merged into white patches where facilities cluster.)
+FAC_FILL, FAC_LINE = [28, 28, 38, 235], [*BLUE_RAMP[-1], 255]
 GRADIENT_MAX_KM = 200.0
 GRADIENT_POWER = 0.7     # 1 = even fade; lower = faster fade near the facility
 
@@ -596,8 +600,12 @@ def _unit(lat, lon):
     return np.column_stack([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)])
 
 
-@st.cache_data(ttl=3600, show_spinner="Drawing distance shading...")
-def distance_image(service: str, tier: str, palette: str = "Indigo"):
+INDIA_BOUNDS = (67.9, 6.4, 97.6, 37.3)       # west, south, east, north
+
+
+@st.cache_data(ttl=3600, show_spinner="Drawing distance shading...", max_entries=40)
+def distance_image(service: str, tier: str, palette: str = "Indigo", flat: bool = False,
+                   bounds: tuple = INDIA_BOUNDS, W: int = 1000):
     """PNG of straight-line distance to the nearest catchment facility, dark near -> pale far.
 
     Drawn on a Web-Mercator grid (about 3 km per pixel) so it lines up with the map, and
@@ -608,8 +616,7 @@ def distance_image(service: str, tier: str, palette: str = "Indigo"):
     from scipy.spatial import cKDTree
 
     cat = load_catchments(service, tier)
-    west, east, south, north = 67.9, 97.6, 6.4, 37.3
-    W = 1000
+    west, south, east, north = bounds
     m_s, m_n = _merc(south), _merc(north)
     H = int(round(W * (m_n - m_s) / np.radians(east - west)))
     lons = west + (np.arange(W) + 0.5) / W * (east - west)
@@ -628,6 +635,8 @@ def distance_image(service: str, tier: str, palette: str = "Indigo"):
     lo = np.floor(pos).astype(int).clip(0, len(stops) - 2)
     frac = (pos - lo)[..., None]
     rgb = stops[lo] * (1 - frac) + stops[lo + 1] * frac
+    if flat:                                            # one even tint, used under the district circles
+        rgb = np.broadcast_to(stops[-1], rgb.shape)
 
     mask = Image.new("L", (W, H), 0)
     draw = ImageDraw.Draw(mask)
@@ -651,38 +660,60 @@ def load_critical_blocks(service: str) -> pd.DataFrame:
     return df.apply(pd.to_numeric, errors="coerce").dropna()
 
 
-@st.cache_data(ttl=3600, show_spinner="Drawing critical-area stripes...")
-def stripes_image(service: str, palette: str = "Indigo"):
+@st.cache_data(ttl=3600, show_spinner="Drawing critical-area stripes...", max_entries=40)
+def stripes_image(service: str, palette: str = "Indigo", bounds: tuple = INDIA_BOUNDS, W: int = 1600):
     """Transparent PNG with diagonal stripes over critical 5 km blocks. Returns (data_url, bounds) or None."""
-    from PIL import Image, ImageFilter
+    from PIL import Image, ImageDraw, ImageFilter
 
     blocks = load_critical_blocks(service)
     if blocks.empty:
         return None
-    west, east, south, north = 67.9, 97.6, 6.4, 37.3
-    W = 1600                                            # about 2 km per pixel
+    west, south, east, north = bounds
+    pad = 0.1                                           # keep blocks just outside the frame so edges fill
+    blocks = blocks[blocks["longitude"].between(west - pad, east + pad) & blocks["latitude"].between(south - pad, north + pad)]
+    if blocks.empty:
+        return None
     m_s, m_n = _merc(south), _merc(north)
     H = int(round(W * (m_n - m_s) / np.radians(east - west)))
-    x = ((blocks["longitude"].to_numpy(float) - west) / (east - west) * W).astype(int).clip(0, W - 1)
-    y = ((m_n - _merc(blocks["latitude"].to_numpy(float))) / (m_n - m_s) * H).astype(int).clip(0, H - 1)
+    x = ((blocks["longitude"].to_numpy(float) - west) / (east - west) * W).round().astype(int)
+    y = ((m_n - _merc(blocks["latitude"].to_numpy(float))) / (m_n - m_s) * H).round().astype(int)
+    ok = (x >= 0) & (x < W) & (y >= 0) & (y < H)
     m = np.zeros((H, W), dtype="uint8")
-    m[y, x] = 255
-    # each block is 5 km (about 3 px): grow to block size, then close pinholes between neighbours
-    zone = Image.fromarray(m, "L").filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.MinFilter(3))
+    m[y[ok], x[ok]] = 255
+    # each block is 5 km: grow each point to a bit more than block size so neighbours join up
+    km_per_px = (east - west) * 111.32 * np.cos(np.radians((south + north) / 2)) / W
+    k = int(np.ceil(7.0 / km_per_px)) | 1               # odd filter size
+    zone = Image.fromarray(m, "L").filter(ImageFilter.MaxFilter(max(k, 3)))
+    if k <= 5:
+        zone = zone.filter(ImageFilter.MinFilter(3))
     zone = np.asarray(zone) > 0
+    # never stripe outside India: clip to the catchment polygons, which are already clipped to the outline
+    try:
+        inside = Image.new("L", (W, H), 0)
+        draw = ImageDraw.Draw(inside)
+        for ring in load_catchments(service, "claimed")["polygon"]:
+            a = np.asarray(ring, dtype=float)
+            if a[:, 0].max() < west or a[:, 0].min() > east or a[:, 1].max() < south or a[:, 1].min() > north:
+                continue
+            px = (a[:, 0] - west) / (east - west) * W
+            py = (m_n - _merc(a[:, 1])) / (m_n - m_s) * H
+            draw.polygon(list(zip(px.tolist(), py.tolist())), fill=255, outline=255)
+        zone &= np.asarray(inside) > 0
+    except Exception:
+        pass
     yy, xx = np.mgrid[0:H, 0:W]
     stripe = ((xx + yy) % 20) < 7                       # diagonal, about 40 km apart
     rgba = np.zeros((H, W, 4), dtype="uint8")
-    rgba[..., :3] = PALETTES[palette][0]
-    rgba[..., 3] = np.where(zone & stripe, 215, 0)
+    rgba[..., :3] = ACCENTS[palette]
+    rgba[..., 3] = np.where(zone & stripe, 240, 0)
     buf = io.BytesIO()
     Image.fromarray(rgba, "RGBA").save(buf, format="PNG", optimize=True)
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode(), [west, south, east, north]
 
 
 def stripe_chip():
-    dark = "rgb%s" % (BLUE_RAMP[0],)
-    pale = "rgb%s" % (BLUE_RAMP[-1],)
+    dark = "rgb%s" % (ACCENT,)
+    pale = "rgb%s" % (BLUE_RAMP[3],)
     return ("<span style='display:inline-flex;align-items:center'><span style='width:22px;height:12px;border-radius:2px;"
             f"background:repeating-linear-gradient(135deg, {dark} 0 3px, {pale} 3px 7px);display:inline-block;"
             "margin-right:4px'></span>striped = critical area</span>")
@@ -739,7 +770,7 @@ def legend(extra=""):
 
 
 def tab_policy(claims, facilities, districts, access):
-    global BLUE_RAMP, FAC_LINE
+    global BLUE_RAMP, FAC_LINE, ACCENT
     st.markdown("Where are people far from a facility that claims a service, and how much of that picture rests on "
                 "weak evidence? Distances are straight-line and only to the roughly 10,000 facilities in this dataset.")
     with st.expander("Your role (optional, kept only for this session)"):
@@ -756,7 +787,8 @@ def tab_policy(claims, facilities, districts, access):
                          "matched in an outside source. Still self-reported, not verified.")
     palette = c3.selectbox("Map colours", list(PALETTES), key="g_palette")
     BLUE_RAMP = PALETTES[palette]
-    FAC_LINE = [*BLUE_RAMP[0], 255]
+    FAC_LINE = [*BLUE_RAMP[-1], 255]
+    ACCENT = ACCENTS[palette]
     km_col = "pop_weighted_km_claimed" if tier == "Any claim" else "pop_weighted_km_better"
     pct_col = "pct_pop_within_30km_claimed" if tier == "Any claim" else "pct_pop_within_30km_better"
     svc_fac = claims[(claims["service"] == service) & (claims["location_quality_flag"] == "good")]
@@ -792,7 +824,7 @@ def tab_policy(claims, facilities, districts, access):
     tier_key = "claimed" if tier == "Any claim" else "better_evidenced"
     cat = optional(lambda: load_catchments(service, tier_key))
     FAC_CHIP = ("<span style='display:inline-flex;align-items:center'><span style='width:8px;height:8px;border-radius:50%;"
-                "background:#fff;border:2px solid #555;display:inline-block;margin-right:4px'></span>facility claiming the service</span>")
+                "background:rgb(28,28,38);border:1px solid #bbb;display:inline-block;margin-right:4px'></span>facility claiming the service</span>")
     v1, v2, v3 = st.columns([2, 3, 2])
     views = (["Catchments (Voronoi)"] if cat is not None else []) + ["District circles"]
     view = v1.radio("Map view", views, horizontal=True, key="g_view")
@@ -849,14 +881,21 @@ def tab_policy(claims, facilities, districts, access):
                       if stripes is not None else
                       (" No critical areas are defined for this service (they exist for 8 of the 14)." if show_crit else "")))
     else:
-        layers = [pdk.Layer("ScatterplotLayer", d[["centre_lat", "centre_lon", "colour", "radius", "tip"]],
-                            get_position="[centre_lon, centre_lat]", get_fill_color="colour", get_radius="radius",
-                            get_line_color=[255, 255, 255], stroked=True, line_width_min_pixels=1, pickable=True)]
+        layers = []
+        if cat is not None:
+            base = optional_value(lambda: distance_image(service, tier_key, palette, True))
+            if base is not None:
+                layers.append(pdk.Layer("BitmapLayer", image=pdk.types.String(base[0]), bounds=base[1], opacity=1.0))
+        layers.append(pdk.Layer("ScatterplotLayer", d[["centre_lat", "centre_lon", "colour", "radius", "tip"]],
+                                get_position="[centre_lon, centre_lat]", get_fill_color="colour", get_radius="radius",
+                                get_line_color=[*BLUE_RAMP[0], 160], stroked=True, line_width_min_pixels=1, pickable=True))
+        if stripes is not None:
+            layers.append(pdk.Layer("BitmapLayer", image=pdk.types.String(stripes[0]), bounds=stripes[1], opacity=1.0))
         if show_fac:
             layers.append(fac_layer)
         st.pydeck_chart(pdk.Deck(layers=layers, tooltip={"text": "{tip}"},
                                  initial_view_state=pdk.ViewState(latitude=22.5, longitude=80.5, zoom=3.9)), height=620)
-        legend(FAC_CHIP)
+        legend(FAC_CHIP + CRIT_CHIP)
         st.caption("One circle per district, placed at its centre and sized by population. Darker means the average "
                    "resident is closer to the nearest facility claiming the service; pale means far. Hover for figures.")
 
@@ -896,30 +935,36 @@ def tab_policy(claims, facilities, districts, access):
     claim_ids = set(svc_fac["facility_id"])
     near = near[near["km0"] <= span].copy()
     near["claims"] = near["facility_id"].isin(claim_ids)
-    near["colour"] = near["claims"].map({True: [255, 255, 255, 245], False: [150, 150, 150, 170]})
+    near["colour"] = near["claims"].map({True: [28, 28, 38, 240], False: [150, 150, 150, 220]})
     near["tip"] = near.apply(lambda r: f"{r['name']}\n{'claims ' + labels[service] if r['claims'] else 'does not claim it'}"
                                        f"\ncare level {clean(r['care_level']) or 'unknown'}", axis=1)
     layers = []
+    # the district map gets its own sharper images, drawn just for the area in view
+    dlat = span * 2.2 / 111.0
+    dlon = dlat / np.cos(np.radians(float(row["centre_lat"])))
+    zb = (round(float(row["centre_lon"]) - dlon, 3), round(float(row["centre_lat"]) - dlat, 3),
+          round(float(row["centre_lon"]) + dlon, 3), round(float(row["centre_lat"]) + dlat, 3))
+    shaded = optional_value(lambda: distance_image(service, tier_key, palette, False, zb, 900)) if cat is not None else None
+    zstripes = optional_value(lambda: stripes_image(service, palette, zb, 900)) if show_crit else None
+    if shaded is not None:
+        layers.append(pdk.Layer("BitmapLayer", image=pdk.types.String(shaded[0]), bounds=shaded[1], opacity=1.0))
+    if zstripes is not None:
+        layers.append(pdk.Layer("BitmapLayer", image=pdk.types.String(zstripes[0]), bounds=zstripes[1], opacity=1.0))
     if blocks is not None:
         bcol = "km_claimed" if tier == "Any claim" else "km_better_evidenced"
         blocks = blocks.copy()
-        blocks["colour"] = blocks[bcol].apply(km_colour)
+        # with the shading underneath, blocks are invisible hover targets; without it they carry the colour
+        blocks["colour"] = [[0, 0, 0, 0]] * len(blocks) if shaded is not None else blocks[bcol].apply(km_colour)
         blocks["tip"] = blocks.apply(lambda r: f"{r[bcol]:.0f} km to the nearest (straight line)\n"
                                                f"about {r['population']:,.0f} people in this 5 km block", axis=1)
         layers.append(pdk.Layer("ScatterplotLayer", blocks[["latitude", "longitude", "colour", "tip"]],
-                                get_position="[longitude, latitude]", get_fill_color="colour", get_radius=2400,
+                                get_position="[longitude, latitude]", get_fill_color="colour", get_radius=2600,
                                 pickable=True))
-    if zones is not None:
-        z = zones[zones["zone_type"] == "critical"].copy()
-        z["tip"] = z.apply(lambda r: f"Critical zone (rank {r['priority_rank']})\n{r['criteria']}", axis=1)
-        layers.append(pdk.Layer("ScatterplotLayer", z[["latitude", "longitude", "tip"]],
-                                get_position="[longitude, latitude]", get_radius=2500, filled=False, stroked=True,
-                                get_line_color=[200, 30, 30, 255], line_width_min_pixels=2, pickable=True))
     if cat is not None:
         ck = haversine_km(row["centre_lat"], row["centre_lon"], cat["facility_latitude"].to_numpy(float),
                           cat["facility_longitude"].to_numpy(float))
         layers.append(pdk.Layer("PolygonLayer", cat[ck <= span * 2.5][["polygon"]], get_polygon="polygon",
-                                filled=False, stroked=True, get_line_color=[40, 40, 40, 220],
+                                filled=False, stroked=True, get_line_color=[*BLUE_RAMP[0], 200],
                                 line_width_min_pixels=1.2, pickable=False))
     layers.append(pdk.Layer("ScatterplotLayer", near[["latitude", "longitude", "colour", "tip"]],
                             get_position="[longitude, latitude]", get_fill_color="colour", get_radius=700,
@@ -931,10 +976,14 @@ def tab_policy(claims, facilities, districts, access):
                                                               longitude=float(row["centre_lon"]), zoom=zoom)), height=560)
     if blocks is None:
         st.caption("No distance blocks for this district and service, so the map shows facility points only.")
-    legend("<span style='margin-right:10px'>white dot = claims the service</span><span style='margin-right:10px'>grey dot = other facility</span>"
-           "<span style='margin-right:10px'>🔴 ring = critical zone (far, populated, deprived)</span>"
-           "<span>dark lines = catchment edges</span>")
-    st.caption("Each square of colour is a 5 km block. Critical zones exist for 8 of the 14 services. "
+    zoom_extra = ("<span style='margin-left:10px'>dark dot = claims the service</span><span style='margin-left:10px'>grey dot = other facility</span>"
+                  "<span style='margin-left:10px'>lines = catchment edges</span>" + CRIT_CHIP)
+    if shaded is not None:
+        gradient_legend(zoom_extra)
+    else:
+        legend(zoom_extra)
+    st.caption("Same shading as the national map: darkest at a facility, fading with straight-line distance. Hover for the "
+               "distance and population of each 5 km block. Critical areas exist for 8 of the 14 services. "
                "A district with no facility in this dataset may still have facilities in reality.")
 
 
