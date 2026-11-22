@@ -368,6 +368,7 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-22 | Two raw government files saved: NMC MBBS colleges (839 rows) and eRaktKosh blood centres (6,524 rows), as `vf_bronze.ext_nmc_colleges_raw` and `vf_bronze.ext_eraktkosh_blood_centres_raw`, with files in the `vf_bronze.external` volume and `external_sources/`. Not matched yet. `External Sources.md` added. See section 14.1 |
 | 2026-11-22 | Task D evidence integrated into chunk C: notebook 09 reads NABH and eRaktKosh matches (at most `externally_supported`, 0 verified), new notebook 13 builds `facility_external_summary`, `facility_external_evidence`, `facility_external_conflicts`, `facility_external_review` and 15 checks (all pass). See section 18 |
 | 2026-11-22 | App: blood bank search now also shows the 29 facilities that eRaktKosh lists as a Blood Bank without a claim of their own, labelled as a directory listing only (`app.py`, `ranking.py`). See section 18.6 |
+| 2026-11-22 | Rural Hospital Network: 42 self-reported profiles loaded (`vf_bronze.ext_rhn_profiles_raw`) and matched in notebook 14 by name, state and place: 5 accepted (medium), 3 ambiguous, 3 bed differences flagged. See section 19 |
 
 ## 12. Implemented: service search tables (chunk C, notebook 09)
 
@@ -928,6 +929,40 @@ No consumer should read `ext_facility_matches` or `facility_external_review` dir
 - Still not loaded: PM-JAY, CGHS, HMIS, National Hospital Directory, Government Health Centres Directory. Their absence says nothing about a facility.
 - `ext_source_status` belongs to Task D and was not edited here.
 - The matcher is the teammate's notebook-10 logic as delivered. The old `F.when(condition, 'fpin')` matcher was not restored.
+
+---
+
+## 19. Implemented: Rural Hospital Network profiles (notebook 14)
+
+**Implemented and tested on 2026-11-22.** 42 self-reported hospital profiles from ruralhospitalnetwork.org (32 with beds, 11 with doctor counts, 15 with a founding year, each with its quote and page URL) are loaded and matched. The file is in the volume `vf_bronze.external` under `rural_hospital_network/` and in `external_sources/`.
+
+| Table | Grain | Rows |
+| --- | --- | ---: |
+| `vf_bronze.ext_rhn_profiles_raw` | one row per profile, all strings, plus provenance | 42 |
+| `vf_silver.ext_rhn_facility_matches` | profile and candidate facility, same columns as Task D's `ext_facility_matches`, source `rural_hospital_network` | 8,110 |
+| `vf_gold.facility_rhn_evidence` | one row per accepted match, profile values beside Virtue Foundation values with quotes and URL | 5 |
+| `vf_gold.facility_rhn_conflicts` | one row per difference, both values kept | 3 |
+| `vf_gold.rhn_checks` | measured checks | 8 of 8 pass |
+
+The matches sit in their own table, not in Task D's `ext_facility_matches`, so the teammate's tables are never overwritten. Notebook 13's summary does not include this source yet.
+
+**Matching rule.** The profiles have no coordinates, so the best status is `accepted_medium`, never high. Accepted needs all three: the same distinctive name words, the same state, and a place word from the profile found in the facility's district, city or address. A similar name (0.80 or more) in the same state and place with different distinctive words is `ambiguous`, for hand review only. Everything else is rejected.
+
+**Results.** 5 accepted, 3 ambiguous, 34 profiles with no candidate worth reviewing. Most of these rural hospitals are simply not in the Virtue Foundation dataset; an unmatched profile says nothing about any facility.
+
+| Profile | Matched facility | Beds (VF, profile) | Founded (VF, profile) |
+| --- | --- | --- | --- |
+| Akhand Jyoti Eye Hospital, Mastichak | Akhand Jyoti Eye Hospital, Bihar | 500, 250 | 2005, not stated |
+| Basel Mission CSI Hospital | CSI Basel Mission Hospital, Gadag, Karnataka | 130, 150 | 1902, 1902 |
+| Cachar Cancer Hospital and Research Centre | same name, Silchar, Assam | 141, not stated | 1996, 1996 |
+| Padhar Hospital | Padhar Hospital, Betul, Madhya Pradesh | unknown, 200 | 1970, not stated |
+| Shaheed Hospital | Shaheed Hospital, Dalli Rajhara, Chhattisgarh | 150, 157 | 1983, not stated |
+
+Differences: one contradiction (Akhand Jyoti, 500 beds against 250; counted as a contradiction because it is above 25% and 20 beds) and two smaller bed differences flagged only (Basel Mission 130 against 150, Shaheed 150 against 157). No founding-year differences. Padhar's 200 beds is shown beside an unknown Virtue Foundation value and is not copied into it.
+
+Ambiguous, for review: Vishnu Dental Care against Vishnu Dental College (Bhimavaram); JMJ Hospital Kadaba against JMJ Hospital (the dataset's record is in Bengaluru); Kasturba Hospital (SEWA Rural) against Kakaba Hospital (Gujarat, probably a different hospital).
+
+**Limits.** Values are self-reported and undated; `downloaded_at` is when the page was read, not a verification date. A match supports that the facility exists and never a clinical service. TAPS Hospital is listed on the site under Jharkhand but its address is Boisar, Maharashtra; it matched nothing in either state. For Akhand Jyoti the Virtue Foundation district is Samastipur while the profile says Saran; the match rests on the name and the town Mastichak.
 
 ---
 
