@@ -63,7 +63,7 @@ DETAIL_SELECT = r"""
 """.replace("__NABH_CLASS__", NABH_CLASS).replace("__RAW__", STATUS_RAW)
 
 DETAIL_FROM = r"""
-  FROM workspace.vf_silver.ext_facility_matches m
+  FROM workspace.vf_silver.ext_facility_matches_all m
   LEFT JOIN workspace.vf_bronze.ext_nabh_raw n ON m.source = 'nabh' AND n.source_record_id = m.source_record_id
   LEFT JOIN workspace.vf_bronze.ext_eraktkosh_raw e ON m.source = 'eraktkosh' AND e.source_record_id = m.source_record_id
   LEFT JOIN workspace.vf_silver.ext_facilities_clean c ON c.source = m.source AND c.source_record_id = m.source_record_id
@@ -117,7 +117,7 @@ SELECT f.name AS vf_name, f.state AS vf_state, f.pincode AS vf_pincode, d.*, m2.
        'ambiguous: review by hand before using' AS review_status
 FROM (SELECT __SELECT__ __FROM__ WHERE m.match_status = 'ambiguous' AND m.facility_id IS NOT NULL) d
 JOIN workspace.vf_silver.facilities f ON f.facility_id = d.facility_id
-LEFT JOIN workspace.vf_silver.ext_facility_matches m2
+LEFT JOIN workspace.vf_silver.ext_facility_matches_all m2
   ON m2.facility_id = d.facility_id AND m2.source = d.source AND m2.source_record_id = d.source_record_id
 """.replace("__SELECT__", DETAIL_SELECT).replace("__FROM__", DETAIL_FROM))
 
@@ -291,10 +291,10 @@ UNION ALL SELECT 2, 'distinct facility ids in summary', CAST((SELECT count(DISTI
 UNION ALL SELECT 3, 'duplicate facility ids in summary', CAST((SELECT count(*) - count(DISTINCT facility_id) FROM s) AS STRING), (SELECT count(*) - count(DISTINCT facility_id) FROM s) = 0
 UNION ALL SELECT 4, 'accepted matches by source (nabh / eraktkosh / wikidata)',
        concat((SELECT count(*) FROM ev WHERE source = 'nabh'), ' / ', (SELECT count(*) FROM ev WHERE source = 'eraktkosh'), ' / ', (SELECT count(*) FROM ev WHERE source = 'wikidata')),
-       (SELECT count(*) FROM ev) = (SELECT count(*) FROM workspace.vf_silver.ext_facility_matches WHERE match_status IN ('accepted_high', 'accepted_medium'))
-UNION ALL SELECT 5, 'facilities with accepted evidence = Task D match summary',
+       (SELECT count(*) FROM ev) = (SELECT count(*) FROM workspace.vf_silver.ext_facility_matches_all WHERE match_status IN ('accepted_high', 'accepted_medium'))
+UNION ALL SELECT 5, 'facilities with accepted evidence vs Task D match summary (the extra ones come from the notebook 17 second pass)',
        concat((SELECT count(*) FROM s WHERE accepted_matches > 0), ' vs ', (SELECT count(*) FROM t)),
-       (SELECT count(*) FROM s WHERE accepted_matches > 0) = (SELECT count(*) FROM t)
+       (SELECT count(*) FROM s WHERE accepted_matches > 0) = (SELECT count(DISTINCT facility_id) FROM workspace.vf_silver.ext_facility_matches_all WHERE match_status IN ('accepted_high', 'accepted_medium'))
 UNION ALL SELECT 6, 'evidence rows missing source_ref, source_type or confidence',
        CAST((SELECT count(*) FROM ev WHERE source_ref IS NULL OR source_type IS NULL OR match_confidence IS NULL OR source_record_id IS NULL) AS STRING),
        (SELECT count(*) FROM ev WHERE source_ref IS NULL OR source_type IS NULL OR match_confidence IS NULL OR source_record_id IS NULL) = 0
@@ -319,7 +319,7 @@ UNION ALL SELECT 12, 'service claims and quotes untouched: claims in facility_se
 UNION ALL SELECT 13, 'ambiguous matches kept for review and not used as evidence',
        CAST((SELECT count(*) FROM workspace.vf_gold.facility_external_review) AS STRING),
        (SELECT count(*) FROM ev WHERE match_status NOT IN ('accepted_high', 'accepted_medium')) = 0
-         AND (SELECT count(*) FROM workspace.vf_gold.facility_external_review) = (SELECT count(*) FROM workspace.vf_silver.ext_facility_matches WHERE match_status = 'ambiguous')
+         AND (SELECT count(*) FROM workspace.vf_gold.facility_external_review) = (SELECT count(*) FROM workspace.vf_silver.ext_facility_matches_all WHERE match_status = 'ambiguous')
 UNION ALL SELECT 14, 'no download time presented as a verification date',
        CAST((SELECT count(*) FROM workspace.vf_gold.facility_service WHERE verification_date IS NOT NULL) AS STRING),
        (SELECT count(*) FROM workspace.vf_gold.facility_service WHERE verification_date IS NOT NULL) = 0
