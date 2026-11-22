@@ -3,7 +3,7 @@
 # MAGIC # 17 - Matching, second pass (distance + name words)
 # MAGIC Task D's matcher (a teammate's notebook) compares whole name strings. It rejects true matches whose outside name carries extra words, for example "Jaslok Hospital And Research Centre, Blood Centre" against "Jaslok Hospital and Research Center" 20 m away. This pass re-reads Task D's **rejected** Wikidata and eRaktKosh candidates (all within 2 km) and compares the distinctive name words instead.
 # MAGIC
-# MAGIC Task D's tables are not changed. Results go to `vf_silver.ext_facility_matches_pass2` (same columns), and the view `vf_silver.ext_facility_matches_all` is Task D's rows with these decisions laid over them. Notebooks 09 and 13 read the view.
+# MAGIC Task D's tables are not changed. Results go to `vf_silver.ext_facility_matches_pass2` (same columns), and the view `vf_silver.ext_facility_matches_prereview` is Task D's rows with these decisions laid over them. Notebook 19 then lays the hand-review decisions over that in `vf_silver.ext_facility_matches_all`. Notebooks 09 and 13 read the view.
 # MAGIC
 # MAGIC **Rule**
 # MAGIC - Noise words are dropped from both names: hospital, blood, centre, bank, research, ltd, trust, speciality words and similar, plus the facility's own city, district and state.
@@ -103,13 +103,16 @@ schema = ("facility_id string, source string, source_record_id string, ext_name 
 spark.createDataFrame(m.astype(object).where(m.notna(), None), schema=schema) \
     .write.mode("overwrite").option("overwriteSchema", "true").saveAsTable("workspace.vf_silver.ext_facility_matches_pass2")
 
-spark.sql("""
-CREATE OR REPLACE VIEW workspace.vf_silver.ext_facility_matches_all AS
+# Task D plus this pass. Notebook 19 (hand review) lays its reviewed rows over this in the view ext_facility_matches_all.
+PRE = """
 SELECT t.* FROM workspace.vf_silver.ext_facility_matches t
 LEFT ANTI JOIN workspace.vf_silver.ext_facility_matches_pass2 p
   ON p.facility_id = t.facility_id AND p.source = t.source AND p.source_record_id = t.source_record_id
 UNION ALL SELECT * FROM workspace.vf_silver.ext_facility_matches_pass2
-""")
+"""
+spark.sql("CREATE OR REPLACE VIEW workspace.vf_silver.ext_facility_matches_prereview AS " + PRE)
+if not spark.catalog.tableExists("workspace.vf_silver.ext_facility_matches_reviewed"):
+    spark.sql("CREATE OR REPLACE VIEW workspace.vf_silver.ext_facility_matches_all AS " + PRE)   # before notebook 19 has ever run
 
 # COMMAND ----------
 
