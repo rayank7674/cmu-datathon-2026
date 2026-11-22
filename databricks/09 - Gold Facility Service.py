@@ -1,8 +1,4 @@
 # Databricks notebook source
-# /// script
-# [tool.databricks.environment]
-# environment_version = "6"
-# ///
 # MAGIC %md
 # MAGIC # 09 - Gold Facility Service
 # MAGIC Builds the table the recommender reads, and a separate verification layer.
@@ -257,13 +253,18 @@ __DUP_JOIN__
 
 # COMMAND ----------
 
+# Notebook 10 marks each match accepted / ambiguous / rejected. Only accepted matches are used.
+d_cols = [r[0] for r in spark.sql("DESCRIBE TABLE workspace.vf_silver.ext_facility_matches").collect()] if HAS_D else []
+d_filter = "lower(CAST(match_status AS STRING)) LIKE 'accepted%'" if "match_status" in d_cols else "lower(coalesce(CAST(match_method AS STRING), '')) NOT LIKE '%ambig%'"
+d_km  = "CAST(distance_km AS DOUBLE)" if "distance_km" in d_cols else "CAST(NULL AS DOUBLE)"
+d_ref = "CAST(source_ref AS STRING)" if "source_ref" in d_cols else "CAST(NULL AS STRING)"
 d_union = r"""
   UNION ALL
   SELECT facility_id, CAST(source AS STRING), CAST(source_record_id AS STRING), CAST(NULL AS STRING), CAST(NULL AS INT), CAST(NULL AS STRING),
-         CAST(NULL AS STRING), CAST(NULL AS DOUBLE), CAST(match_score AS DOUBLE), CAST(match_method AS STRING), 'vf_silver.ext_facility_matches'
+         CAST(NULL AS STRING), __D_KM__, CAST(match_score AS DOUBLE), concat('notebook 10 match: ', CAST(match_method AS STRING)), 'vf_silver.ext_facility_matches', __D_REF__
   FROM workspace.vf_silver.ext_facility_matches
-  WHERE facility_id IS NOT NULL AND lower(coalesce(CAST(match_method AS STRING), '')) NOT LIKE '%ambig%'
-""" if HAS_D else ""
+  WHERE facility_id IS NOT NULL AND __D_FILTER__
+""".replace("__D_KM__", d_km).replace("__D_REF__", d_ref).replace("__D_FILTER__", d_filter) if HAS_D else ""
 
 spark.sql(r"""
 CREATE OR REPLACE TABLE workspace.vf_gold.facility_verification
@@ -271,19 +272,20 @@ COMMENT 'One row per facility, service and outside source. matched_at is the tim
 AS
 WITH m0 AS (
   SELECT facility_id, source, ext_id, ext_kind, ext_tier, ext_operator, ext_specialities, km, name_sim,
-         'name word overlap + distance (notebook 06)' AS method, 'vf_gold.facility_external_match' AS via
+         'name word overlap + distance (notebook 06)' AS method, 'vf_gold.facility_external_match' AS via, CAST(NULL AS STRING) AS ref
   FROM workspace.vf_gold.facility_external_match
   __D_UNION__
 ),
 m AS (  -- one row per facility and source: the best-scoring match
   SELECT facility_id, source, max_by(named_struct('ext_id', ext_id, 'ext_kind', ext_kind, 'ext_tier', ext_tier, 'ext_specialities', ext_specialities,
-                                                  'km', km, 'score', name_sim, 'method', method, 'via', via), coalesce(name_sim, 0)) AS x
+                                                  'km', km, 'score', name_sim, 'method', method, 'via', via, 'ref', ref), coalesce(name_sim, 0)) AS x
   FROM m0 GROUP BY facility_id, source
 ),
 src AS (
   SELECT facility_id, source, x.*,
-    CASE WHEN lower(source) LIKE '%openstreetmap%' OR lower(source) = 'osm' THEN concat('https://www.openstreetmap.org/', x.ext_id) END AS source_url,
+    coalesce(CASE WHEN lower(source) LIKE '%openstreetmap%' OR lower(source) = 'osm' THEN concat('https://www.openstreetmap.org/', x.ext_id) END, CASE WHEN x.ref LIKE 'http%' THEN x.ref END) AS source_url,
     CASE WHEN lower(source) LIKE '%openstreetmap%' OR lower(source) = 'osm' THEN 'crowd-sourced map'
+         WHEN lower(source) RLIKE 'wikidata' THEN 'crowd-sourced knowledge base'
          WHEN lower(source) RLIKE 'erakt' THEN 'eraktkosh'
          WHEN lower(source) RLIKE 'cghs' THEN 'cghs'
          WHEN lower(source) RLIKE 'pm ?-?_?jay|ayushman' THEN 'pmjay'
@@ -298,7 +300,7 @@ ext_rows AS (
   -- a) the facility exists in an outside source (existence only, never a service)
   SELECT s.facility_id, '_facility_existence' AS service, CAST(NULL AS STRING) AS claim_status, 'externally_supported' AS verification_status,
          s.source, s.ext_id, s.source_url, s.score, s.method, s.km,
-         concat('Matched to a ', s.source_class, ' record ', round(s.km, 2), ' km away. Supports that the facility exists; says nothing about any service.') AS notes,
+         concat('Matched to a ', s.source_class, ' record', coalesce(concat(' ', round(s.km, 2), ' km away'), ''), '. Supports that the facility exists; says nothing about any service.') AS notes,
          false AS contradiction_flag
   FROM src s
   UNION ALL
@@ -411,9 +413,80 @@ WHEN MATCHED THEN UPDATE SET
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ### 2c. `facility_service_canonical`: one row per centre and service
+# MAGIC Uses `vf_silver.facility_canonical` (notebook 07). Records judged to be the same place are folded into one centre.
+# MAGIC The centre keeps the **strongest** claim among its records and lists every record's claim in `claims_by_record`, so the source of each quote stays visible. `evidence_facility_id` says which original record the shown quote came from. Original rows stay in `facility_service`.
+
+# COMMAND ----------
+
+if exists("workspace.vf_silver.facility_canonical"):
+    spark.sql(r"""
+    CREATE OR REPLACE VIEW workspace.vf_gold.facility_service_canonical
+    COMMENT 'One row per centre and service. Near-certain duplicate records are folded into one centre; the strongest claim is shown and every record claim is kept in claims_by_record.'
+    AS
+    WITH m AS (
+      SELECT c.canonical_facility_id, c.merged_group_size, fs.*,
+        row_number() OVER (PARTITION BY c.canonical_facility_id, fs.service ORDER BY
+            CASE fs.claim_strength WHEN 'strong' THEN 3 WHEN 'moderate' THEN 2 WHEN 'weak' THEN 1 ELSE 0 END DESC,
+            CAST(fs.facility_id = c.canonical_facility_id AS INT) DESC, fs.facility_id) AS rn,
+        count(CASE WHEN fs.claim_detected THEN 1 END) OVER (PARTITION BY c.canonical_facility_id, fs.service) AS records_claiming,
+        max(CASE fs.verification_status WHEN 'verified' THEN 5 WHEN 'contradicted' THEN 4 WHEN 'externally_supported' THEN 3 WHEN 'inferred' THEN 2 ELSE 1 END)
+            OVER (PARTITION BY c.canonical_facility_id, fs.service) AS vrank,
+        max(CASE WHEN fs.facility_existence_status = 'externally_supported' THEN 1 ELSE 0 END) OVER (PARTITION BY c.canonical_facility_id, fs.service) AS any_exist,
+        max(CAST(fs.contradiction_flag AS INT)) OVER (PARTITION BY c.canonical_facility_id, fs.service) AS any_contra,
+        max(CASE WHEN fs.hours_claim = '24x7' THEN 1 ELSE 0 END) OVER (PARTITION BY c.canonical_facility_id, fs.service) AS any_24x7,
+        collect_list(CASE WHEN fs.claim_detected OR fs.negating_quote IS NOT NULL THEN named_struct('facility_id', fs.facility_id, 'name', fs.name, 'claim_status', fs.claim_status,
+            'claim_strength', fs.claim_strength, 'source_field', fs.source_field, 'quote', fs.supporting_quote, 'negating_quote', fs.negating_quote) END)
+            OVER (PARTITION BY c.canonical_facility_id, fs.service) AS claims_by_record
+      FROM workspace.vf_gold.facility_service fs JOIN workspace.vf_silver.facility_canonical c ON c.facility_id = fs.facility_id
+    )
+    SELECT
+      k.facility_id, k.name, k.state, k.district, k.facility_type, k.level_kind, e.service, e.service_label,
+      k.care_level, coalesce(e.service_specific_level, k.service_specific_level) AS service_specific_level,
+      e.claim_detected, e.claim_status, e.claim_strength, e.claim_basis, e.supporting_signal, e.supporting_quote, e.source_field,
+      e.service_evidence_source, e.source_ref, e.supporting_claims, e.supporting_fields, e.all_quotes, e.negating_quote, e.plausibility_flag,
+      k.level_confidence, k.quality_score,
+      element_at(array('unknown', 'inferred', 'externally_supported', 'contradicted', 'verified'), e.vrank) AS verification_status,
+      CASE WHEN e.vrank > 2 THEN coalesce(e.verification_source, k.verification_source) END AS verification_source,
+      e.verification_date,
+      e.any_contra = 1 AS contradiction_flag,
+      CASE WHEN e.any_exist = 1 THEN 'externally_supported' ELSE 'unknown' END AS facility_existence_status,
+      coalesce(k.facility_existence_source, e.facility_existence_source) AS facility_existence_source,
+      k.latitude, k.longitude, k.location_quality_flag, k.location_quality_source, k.care_level_source,
+      k.contact_verification_status, k.contact_phone, 'unknown' AS availability_status,
+      CASE WHEN e.any_24x7 = 1 THEN '24x7' ELSE e.hours_claim END AS hours_claim, e.hours_quote,
+      e.facility_id AS evidence_facility_id,
+      e.merged_group_size AS merged_records,
+      e.records_claiming,
+      e.claims_by_record
+    FROM m e JOIN workspace.vf_gold.facility_service k ON k.facility_id = e.canonical_facility_id AND k.service = e.service
+    WHERE e.rn = 1
+    """)
+    display(spark.sql("""
+    SELECT (SELECT count(DISTINCT facility_id) FROM workspace.vf_gold.facility_service) AS records,
+           count(DISTINCT facility_id) AS centres, sum(CAST(claim_detected AS INT)) AS claims_per_centre,
+           (SELECT sum(CAST(claim_detected AS INT)) FROM workspace.vf_gold.facility_service) AS claims_per_record
+    FROM workspace.vf_gold.facility_service_canonical"""))
+else:
+    print("vf_silver.facility_canonical not found (run notebook 07 first); facility_service_canonical not built")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## 3. Tests
 
 # COMMAND ----------
+
+canon_checks = r"""
+  UNION ALL SELECT 15, 'canonical view: one row per centre x service',
+         (SELECT abs(count(*) - count(DISTINCT facility_id, service)) + abs(count(DISTINCT facility_id) - (SELECT count(DISTINCT canonical_facility_id) FROM workspace.vf_silver.facility_canonical)) FROM workspace.vf_gold.facility_service_canonical), 'every centre present once per service'
+  UNION ALL SELECT 16, 'canonical view: a centre claims a service exactly when one of its records does',
+         (SELECT count(*) FROM workspace.vf_gold.facility_service_canonical v
+            JOIN (SELECT c.canonical_facility_id, fs.service, bool_or(fs.claim_detected) AS any_claim FROM workspace.vf_gold.facility_service fs
+                  JOIN workspace.vf_silver.facility_canonical c ON c.facility_id = fs.facility_id GROUP BY 1, 2) a
+              ON a.canonical_facility_id = v.facility_id AND a.service = v.service
+          WHERE v.claim_detected <> a.any_claim OR (v.claim_detected AND v.supporting_quote IS NULL)), 'merging never invents or loses a claim'
+""" if exists("workspace.vf_gold.facility_service_canonical") else ""
 
 spark.sql(r"""
 CREATE OR REPLACE TABLE workspace.vf_gold.facility_service_checks
@@ -452,8 +525,9 @@ SELECT check_name, bad_rows, bad_rows = 0 AS passed, detail, current_timestamp()
          (SELECT count(*) FROM fs WHERE hours_claim NOT IN ('24x7', 'daytime', 'unknown') OR (hours_claim <> 'unknown' AND NOT claim_detected)), ''
   UNION ALL SELECT 14, 'inferred means a claim, unknown means none',
          (SELECT count(*) FROM fs WHERE (verification_status = 'inferred' AND NOT claim_detected) OR (verification_status = 'unknown' AND claim_detected)), ''
+  __CANON_CHECKS__
 ) ORDER BY o
-""")
+""".replace("__CANON_CHECKS__", canon_checks))
 display(spark.sql("SELECT * FROM workspace.vf_gold.facility_service_checks"))
 
 # COMMAND ----------
