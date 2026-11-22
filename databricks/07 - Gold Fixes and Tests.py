@@ -1,8 +1,4 @@
 # Databricks notebook source
-# /// script
-# [tool.databricks.environment]
-# environment_version = "6"
-# ///
 # MAGIC %md
 # MAGIC # 07 - Gold Fixes and Tests
 # MAGIC Corrections and quality flags that sit **beside** the existing tables. Nothing from notebooks 01-06 is edited, and no row is merged or deleted.
@@ -13,6 +9,8 @@
 # MAGIC | `vf_silver.facility_geo_quality` | One row per facility: `geo_flag` good / suspect / invalid, with the reason |
 # MAGIC | `vf_silver.facility_duplicate_groups` | Likely duplicate records, grouped. Flag only |
 # MAGIC | `vf_silver.facility_duplicate_pairs` | The individual links behind the groups (working table) |
+# MAGIC | `vf_silver.facility_canonical` | Maps each record to its centre; near-certain duplicates share one centre |
+# MAGIC | `vf_gold.facility_level_canonical` | View: one row per centre, with the higher rung |
 # MAGIC | `vf_gold.quality_tests` | Named assertions with pass/fail and counts |
 # MAGIC
 # MAGIC Safe to rerun. Run after 04 and 06; rerun 09 afterwards so it picks up the flags.
@@ -295,6 +293,86 @@ FROM workspace.vf_silver.facility_duplicate_groups GROUP BY 1 ORDER BY 1
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## 3b. `facility_canonical`: treat near-certain duplicates as one centre
+# MAGIC Team decision (2026-11-21): when the chance that two records are the same place is above 80%, treat them as **one centre whose rung is the higher of the two**.
+# MAGIC
+# MAGIC The duplicate confidence here is a label, not a measured probability. The mapping used: **`high` = above 80%**. A `high` link needs three things at once: the same phone number or the same website, names that overlap, and positions within 1 km. `medium` (close together with similar names but no shared phone or website) and `low` (same organisation, far apart) are **not** merged; those are often a hospital and its diagnostic unit, or branches.
+# MAGIC
+# MAGIC - Every original record stays in `vf_silver.facilities`, with its own evidence.
+# MAGIC - `facility_canonical` maps each record to its centre. The centre's record is the one with the higher rung (then the higher quality score).
+# MAGIC - `vf_gold.facility_level_canonical` is the one-row-per-centre view of `facility_level_v2`.
+
+# COMMAND ----------
+
+spark.sql(r"""
+CREATE OR REPLACE TABLE workspace.vf_silver.facility_canonical
+COMMENT 'Maps every facility record to its centre. Records linked with high duplicate confidence (treated as above 80%) share one canonical_facility_id. Nothing is deleted. Built by notebook 07.'
+AS
+SELECT facility_id, facility_id AS merge_group, facility_id AS canonical_facility_id, true AS is_canonical_record,
+       CAST(1 AS BIGINT) AS merged_group_size, CAST(NULL AS STRING) AS merge_confidence, CAST(NULL AS STRING) AS merge_basis,
+       CAST(NULL AS INT) AS care_level, CAST(NULL AS INT) AS canonical_care_level
+FROM workspace.vf_silver.facilities
+""")
+
+for round_no in range(1, 31):
+    changed = int(spark.sql(r"""
+    MERGE INTO workspace.vf_silver.facility_canonical t
+    USING (
+      SELECT u.x, min(n.merge_group) AS mn
+      FROM (SELECT a AS x, b AS y FROM workspace.vf_silver.facility_duplicate_pairs WHERE confidence = 'high'
+            UNION ALL SELECT b, a FROM workspace.vf_silver.facility_duplicate_pairs WHERE confidence = 'high') u
+      JOIN workspace.vf_silver.facility_canonical n ON n.facility_id = u.y
+      GROUP BY u.x
+    ) s ON t.facility_id = s.x AND s.mn < t.merge_group
+    WHEN MATCHED THEN UPDATE SET t.merge_group = s.mn
+    """).collect()[0][0])
+    print("merge round", round_no, "records changed:", changed)
+    if changed == 0:
+        break
+
+spark.sql(r"""
+CREATE OR REPLACE TABLE workspace.vf_silver.facility_canonical
+COMMENT 'Maps every facility record to its centre. Records linked with high duplicate confidence (treated as above 80%) share one canonical_facility_id. Nothing is deleted. Built by notebook 07.'
+AS
+WITH b AS (
+  SELECT c.facility_id, c.merge_group, v.care_level, v.quality_score,
+         (SELECT max_by(basis, name_sim) FROM workspace.vf_silver.facility_duplicate_pairs p WHERE p.confidence = 'high' AND (p.a = c.facility_id OR p.b = c.facility_id)) AS merge_basis
+  FROM workspace.vf_silver.facility_canonical c JOIN workspace.vf_gold.facility_level_v2 v ON v.facility_id = c.facility_id
+)
+SELECT facility_id, merge_group,
+  first_value(facility_id) OVER w AS canonical_facility_id,
+  facility_id = first_value(facility_id) OVER w AS is_canonical_record,
+  count(*) OVER (PARTITION BY merge_group) AS merged_group_size,
+  CASE WHEN count(*) OVER (PARTITION BY merge_group) > 1 THEN 'high (treated as above 80%)' END AS merge_confidence,
+  merge_basis,
+  care_level,
+  max(care_level) OVER (PARTITION BY merge_group) AS canonical_care_level
+FROM b
+WINDOW w AS (PARTITION BY merge_group ORDER BY coalesce(care_level, 0) DESC, coalesce(quality_score, 0) DESC, facility_id)
+""")
+
+spark.sql(r"""
+CREATE OR REPLACE VIEW workspace.vf_gold.facility_level_canonical
+COMMENT 'One row per centre: facility_level_v2 with near-certain duplicate records folded into one. care_level is the highest rung among the merged records.'
+AS
+SELECT v.*, c.merged_group_size AS merged_records, m.member_facility_ids, m.member_names, m.member_care_levels,
+       CASE WHEN c.merged_group_size > 1 THEN concat('Merged from ', c.merged_group_size, ' records judged to be the same place (', c.merge_basis, '). Rung is the highest among them.') END AS merge_note
+FROM workspace.vf_gold.facility_level_v2 v
+JOIN workspace.vf_silver.facility_canonical c ON c.facility_id = v.facility_id AND c.is_canonical_record
+JOIN (SELECT c2.canonical_facility_id, array_sort(collect_list(c2.facility_id)) AS member_facility_ids,
+             collect_list(v2.name) AS member_names, collect_list(v2.care_level) AS member_care_levels
+      FROM workspace.vf_silver.facility_canonical c2 JOIN workspace.vf_gold.facility_level_v2 v2 ON v2.facility_id = c2.facility_id
+      GROUP BY c2.canonical_facility_id) m ON m.canonical_facility_id = v.facility_id
+""")
+display(spark.sql("""
+SELECT c.canonical_facility_id, v.name, v.care_level AS record_rung, c.canonical_care_level AS centre_rung, c.is_canonical_record, c.merge_basis
+FROM workspace.vf_silver.facility_canonical c JOIN workspace.vf_gold.facility_level_v2 v ON v.facility_id = c.facility_id
+WHERE c.merged_group_size > 1 ORDER BY c.canonical_facility_id, c.is_canonical_record DESC
+"""))
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## 4. `quality_tests`
 # MAGIC Each row is one named assertion. `passed` is true when `bad_rows` is 0. The test on the original `facility_level` is expected to fail: it documents the known issue that v2 fixes.
 
@@ -355,6 +433,16 @@ SELECT test_id, test_name, table_checked, bad_rows, total_rows, bad_rows = 0 AS 
   UNION ALL SELECT 13, 'flagging removed no facility', 'vf_silver.facilities',
          (SELECT abs(count(*) - 9989) FROM workspace.vf_silver.facilities), (SELECT count(*) FROM workspace.vf_silver.facilities), 'duplicates and bad positions are flagged, never deleted (9,989 rows)'
   __FS_TESTS__
+  UNION ALL SELECT 20, 'canonical map: one row per facility, every centre points at its own record', 'vf_silver.facility_canonical',
+         (SELECT abs(count(*) - count(DISTINCT facility_id)) + abs(count(*) - (SELECT count(*) FROM workspace.vf_silver.facilities)) FROM workspace.vf_silver.facility_canonical)
+         + (SELECT count(*) FROM workspace.vf_silver.facility_canonical c LEFT JOIN workspace.vf_silver.facility_canonical k ON k.facility_id = c.canonical_facility_id WHERE k.facility_id IS NULL OR NOT k.is_canonical_record),
+         (SELECT count(*) FROM workspace.vf_silver.facility_canonical), 'no record is dropped by merging'
+  UNION ALL SELECT 21, 'merged centre takes the highest rung of its records', 'vf_gold.facility_level_canonical',
+         (SELECT count(*) FROM workspace.vf_gold.facility_level_canonical l JOIN workspace.vf_silver.facility_canonical c ON c.canonical_facility_id = l.facility_id WHERE coalesce(c.care_level, 0) > coalesce(l.care_level, 0)),
+         (SELECT count(*) FROM workspace.vf_gold.facility_level_canonical), 'team rule: one centre, the higher rung'
+  UNION ALL SELECT 22, 'only high-confidence links are merged', 'vf_silver.facility_canonical',
+         (SELECT count(*) FROM workspace.vf_silver.facility_canonical c WHERE c.merged_group_size > 1 AND NOT EXISTS (SELECT 1 FROM workspace.vf_silver.facility_duplicate_pairs p WHERE p.confidence = 'high' AND (p.a = c.facility_id OR p.b = c.facility_id))),
+         (SELECT count(*) FROM workspace.vf_silver.facility_canonical WHERE merged_group_size > 1), 'medium and low links stay separate records'
   UNION ALL SELECT 18, 'no stray verification-date columns', 'information_schema.columns',
          (SELECT count(*) FROM workspace.information_schema.columns WHERE table_schema IN ('vf_silver', 'vf_gold')
             AND lower(column_name) RLIKE 'verif.*(date|_at|time)|last_verified|verified_on'
