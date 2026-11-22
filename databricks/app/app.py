@@ -178,6 +178,34 @@ def load_district_access() -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_public_facilities() -> pd.DataFrame:
+    """Government facility counts per map district (Rural Health Statistics 2021-22, as on 31 March 2022)."""
+    df = query(f"""
+        SELECT district_id, district_name, state_name, rhs_status, govt_sub_centres, govt_phcs, govt_chcs,
+               govt_sub_divisional_hospitals, govt_district_hospitals, govt_facilities_total,
+               govt_hospitals_chc_and_above, our_facilities_located, our_facilities_rung3plus, people_per_govt_hospital
+        FROM {GOLD}.district_public_facilities
+    """)
+    for col in df.columns[4:]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_state_capacity() -> pd.DataFrame:
+    df = query(f"""
+        SELECT state, govt_beds_chc, govt_beds_sub_divisional_hospital, govt_beds_district_hospital,
+               phc_doctors_required, phc_doctors_in_position, phc_doctors_shortfall,
+               chc_specialists_required, chc_specialists_in_position, chc_specialists_shortfall,
+               chc_specialists_shortfall_pct
+        FROM {GOLD}.state_public_health_capacity
+    """)
+    for col in df.columns[1:]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
 @st.cache_data(ttl=3600, show_spinner="Loading map blocks...")
 def load_blocks(district_id: str, service: str) -> pd.DataFrame:
     df = query(f"""
@@ -1005,6 +1033,37 @@ def tab_policy(claims, facilities, districts, access):
         t.columns = ["District", "State", "Population (2020)", "Avg straight-line km", "% people within 30 km",
                      "Facilities in dataset", "Deprivation (NFHS)"]
         st.dataframe(t.round(1), hide_index=True, use_container_width=True)
+
+    pub = optional(load_public_facilities)
+    if pub is not None and len(pub):
+        with st.expander("Government facilities beside this dataset (official counts, March 2022)"):
+            known = pub[pub["govt_facilities_total"].notna()]
+            blind = known[(known["our_facilities_located"] == 0) & (known["govt_hospitals_chc_and_above"] > 0)]
+            st.markdown(
+                f"The government counted **{int(known['govt_facilities_total'].sum()):,}** public facilities in the "
+                f"{len(known)} districts we could link, of which **{int(known['govt_hospitals_chc_and_above'].sum()):,}** "
+                f"are community health centres or hospitals. This dataset has **{int(known['our_facilities_located'].sum()):,}** "
+                f"facilities there, mostly private. In **{len(blind)}** districts this dataset has no facility at all, yet the "
+                f"government runs **{int(blind['govt_hospitals_chc_and_above'].sum()):,}** health centres or hospitals in them.")
+            st.caption("Source: Rural Health Statistics 2021-22 (Ministry of Health and Family Welfare), as on 31 March 2022. "
+                       "The two columns are different sets of facilities, so one is not a share of the other. "
+                       f"{len(pub) - len(known)} districts could not be linked by state and name and show no count (unknown, not zero).")
+            t2 = known.sort_values(["our_facilities_located", "govt_hospitals_chc_and_above"], ascending=[True, False])[
+                ["district_name", "state_name", "govt_sub_centres", "govt_phcs", "govt_chcs", "govt_sub_divisional_hospitals",
+                 "govt_district_hospitals", "our_facilities_located", "our_facilities_rung3plus", "people_per_govt_hospital"]]
+            t2.columns = ["District", "State", "Govt sub centres", "Govt PHCs", "Govt CHCs", "Govt sub-divisional hospitals",
+                          "Govt district hospitals", "Facilities in this dataset", "Of those, level 3+", "People per govt CHC or hospital"]
+            st.dataframe(t2, hide_index=True, use_container_width=True)
+            cap = optional(load_state_capacity)
+            if cap is not None and len(cap):
+                st.markdown("**Specialists at government community health centres, by state** (rural areas, March 2022)")
+                t3 = cap.sort_values("chc_specialists_shortfall_pct", ascending=False)[
+                    ["state", "chc_specialists_required", "chc_specialists_in_position", "chc_specialists_shortfall",
+                     "chc_specialists_shortfall_pct", "phc_doctors_required", "phc_doctors_in_position", "phc_doctors_shortfall"]]
+                t3.columns = ["State", "CHC specialists required", "In position", "Shortfall", "Shortfall %",
+                              "PHC doctors required", "In position ", "Shortfall "]
+                st.dataframe(t3, hide_index=True, use_container_width=True)
+                st.caption("A blank shortfall means a surplus or a figure the report does not give. It does not mean zero.")
 
     st.subheader("District zoom")
     c1, c2 = st.columns(2)
