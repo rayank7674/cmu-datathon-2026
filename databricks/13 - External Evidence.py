@@ -157,9 +157,14 @@ SELECT ev.facility_id, f.name, ev.source, ev.source_record_id, ev.match_status, 
 FROM ev JOIN f ON f.facility_id = ev.facility_id
 WHERE ev.distance_km > 2
 UNION ALL
-SELECT ev.facility_id, f.name, ev.source, ev.source_record_id, ev.match_status, 'nabh_claim_vs_directory', true,
+SELECT ev.facility_id, f.name, ev.source, ev.source_record_id, ev.match_status,
+       CASE WHEN ev.evidence_class IN ('withdrawn', 'suspended') THEN 'nabh_claim_vs_directory' ELSE 'nabh_claim_broader_than_directory_record' END,
+       ev.evidence_class IN ('withdrawn', 'suspended'),
        'facility text claims NABH accreditation', concat(ev.evidence_class, ': ', ev.nabh_status_text),
-       'The facility says it is NABH accredited; the matched directory record is not a current accreditation entry.', ev.source_ref
+       CASE WHEN ev.evidence_class IN ('withdrawn', 'suspended')
+            THEN 'The facility says it is NABH accredited; the matched directory record is withdrawn or suspended.'
+            ELSE 'The facility says it is NABH accredited; the matched directory record is a certification or empanelment, not an accreditation. Not counted as a contradiction: the match is by name and pincode only and the facility may hold another record.' END,
+       ev.source_ref
 FROM ev JOIN f ON f.facility_id = ev.facility_id JOIN l ON l.facility_id = ev.facility_id
 WHERE ev.source = 'nabh' AND l.nabh_claimed
   AND ev.evidence_class IN ('withdrawn', 'suspended', 'certification_not_accreditation', 'empanelment_not_accreditation')
