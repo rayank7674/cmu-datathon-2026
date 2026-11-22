@@ -566,7 +566,8 @@ def tab_emrs(claims, districts):
 BLUE_RAMP = [(11, 79, 74), (20, 116, 107), (42, 157, 143), (92, 184, 171),
              (143, 208, 197), (194, 229, 222), (233, 245, 242)]
 FAC_FILL, FAC_LINE = [255, 255, 255, 240], [11, 79, 74, 255]
-GRADIENT_MAX_KM = 120.0
+GRADIENT_MAX_KM = 200.0
+GRADIENT_POWER = 0.7     # 1 = even fade; lower = faster fade near the facility
 
 
 def _merc(lat):
@@ -604,7 +605,7 @@ def distance_image(service: str, tier: str):
     chord, _ = tree.query(_unit(glat.ravel(), glon.ravel()))
     km = (2 * 6371.0088 * np.arcsin(np.clip(chord / 2, 0, 1))).reshape(H, W)
 
-    t = np.sqrt(np.clip(km / GRADIENT_MAX_KM, 0, 1))          # sqrt: more detail close to facilities
+    t = np.clip(km / GRADIENT_MAX_KM, 0, 1) ** GRADIENT_POWER
     stops = np.array(BLUE_RAMP, dtype=float)
     pos = t * (len(stops) - 1)
     lo = np.floor(pos).astype(int).clip(0, len(stops) - 2)
@@ -632,7 +633,7 @@ def gradient_legend(extra=""):
         "<span>at the facility</span>"
         f"<span style='display:inline-block;width:220px;height:12px;border-radius:3px;background:linear-gradient(90deg, {css})'></span>"
         f"<span>{GRADIENT_MAX_KM:.0f} km or more</span>"
-        "<span style='color:#666'>(the middle of the bar is 30 km)</span>"
+        f"<span style='color:#666'>(the middle of the bar is about {GRADIENT_MAX_KM * 0.5 ** (1 / GRADIENT_POWER):.0f} km)</span>"
         f"{extra}</div>", unsafe_allow_html=True)
 KM_BREAKS = [10, 20, 30, 45, 60, 100]
 KM_LABELS = ["under 10", "10-20", "20-30", "30-45", "45-60", "60-100", "over 100"]
