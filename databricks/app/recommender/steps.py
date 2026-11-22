@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from .config import Config
-from .knowledge import Knowledge, load
+from .knowledge import Knowledge, load, reliability_estimate
 
 
 # ---------------------------------------------------------------------------
@@ -33,6 +33,7 @@ class State:
     transport: list | None = None
     patient: dict = field(default_factory=dict)
     telehealth_says_go: bool = False
+    onset_min: float = 0.0          # minutes since the problem started
     time_provider: Callable | None = None
     kb: Knowledge | None = None
 
@@ -265,9 +266,29 @@ def travel_time(s: State, cfg: Config) -> State:
 # ---------------------------------------------------------------------------
 # 7. care_probability
 # ---------------------------------------------------------------------------
-def p_service_exists(claims: pd.DataFrame, cfg: Config) -> pd.Series:
+def strength_table(cfg: Config, kb: Knowledge | None, cautious: bool = False) -> dict:
+    """claim_strength -> P(service exists). From the hand-check counts in
+    claim_reliability.csv (Beta-Binomial, uniform prior): the mean, or in
+    cautious mode the cfg.cautious_quantile lower bound. cfg.p_service_by_strength
+    overrides the table."""
+    if cfg.p_service_by_strength is not None:
+        t = dict(cfg.p_service_by_strength)
+        t.setdefault(None, cfg.p_no_claim)
+        return t
+    rel = (kb.reliability if kb is not None else None) or {}
+    q = cfg.cautious_quantile if cautious else None
+    t = {k: reliability_estimate(r["supported"], r["checked"], q) for k, r in rel.items()}
+    for k, v in {"strong": 0.85, "moderate": 0.70, "weak": 0.40}.items():   # only if the table is missing
+        t.setdefault(k, v)
+    t[None] = cfg.p_no_claim
+    return t
+
+
+def p_service_exists(claims: pd.DataFrame, cfg: Config, kb: Knowledge | None = None,
+                     cautious: bool = False) -> pd.Series:
     """P(the facility really offers the service) for each claim row."""
-    p = claims["claim_strength"].map(lambda v: cfg.p_service_by_strength.get(v, cfg.p_service_by_strength[None]))
+    table = strength_table(cfg, kb, cautious)
+    p = claims["claim_strength"].map(lambda v: table.get(v, table[None]))
     p = p.astype(float)
     vs = claims.get("verification_status", pd.Series("", index=claims.index)).fillna("")
     p = np.where(vs.eq("verified"), np.maximum(p, cfg.verified_floor), p)
@@ -283,11 +304,39 @@ def p_service_exists(claims: pd.DataFrame, cfg: Config) -> pd.Series:
 
 
 def timeliness(minutes: np.ndarray, tau: float, cfg: Config, late: float | None = None) -> np.ndarray:
+    """Fallback (assumed) curve for conditions with no published one."""
     x = np.asarray(minutes, float) / tau
     decay = np.maximum(0.0, 1 - x / 2) if cfg.timeliness_curve == "linear" else np.exp(-x)
     late = cfg.late_care_benefit if late is None or pd.isna(late) else float(late)
     t = late + (1 - late) * np.nan_to_num(decay, nan=0.0)
     return np.where(np.isinf(minutes), 0.0, t)  # unreachable by any allowed mode
+
+
+def curve_value(curve: dict, minutes: np.ndarray, curves: dict | None = None) -> np.ndarray:
+    """Share of the benefit of care left after `minutes` of total delay, from a
+    published curve (a row of time_curves.csv):
+      ratio   risk multiplies by `ratio` every `per_min` minutes -> benefit = ratio ** (-t / per_min)
+      linear  straight line from 1 at t = 0 to 0 at `zero_at` minutes
+      points  straight lines between (minutes, share) points, flat outside them
+    then  late_benefit × L + (1 - late_benefit) × that, where L = 1, or the curve named in
+    late_curve (so the part of the benefit outside the drug window still falls with delay)."""
+    t = np.asarray(minutes, float)
+    prm, kind = curve["params"], curve["kind"]
+    with np.errstate(over="ignore", invalid="ignore"):
+        if kind == "ratio":
+            g = prm["ratio"] ** (-t / prm["per_min"])
+        elif kind == "linear":
+            g = np.clip(1 - t / prm["zero_at"], 0, 1)
+        elif kind == "points":
+            xs, ys = zip(*sorted(prm["points"]))
+            g = np.interp(np.where(np.isinf(t), xs[-1], t), xs, ys)
+        else:
+            raise ValueError(f"unknown curve kind {kind!r}")
+    late = curve.get("late_benefit")
+    late = 0.0 if late is None or pd.isna(late) else float(late)
+    lc = curve.get("late_curve")
+    tail = curve_value(curves[lc], t, None) if (curves and isinstance(lc, str) and lc in curves) else 1.0
+    return np.where(np.isinf(t), 0.0, late * tail + (1 - late) * np.nan_to_num(g, nan=0.0))
 
 
 def care_probability(s: State, cfg: Config) -> State:
@@ -302,16 +351,22 @@ def care_probability(s: State, cfg: Config) -> State:
                     P(service exists) × credit; 1 if the condition needs no special service
       rung factor = rung_shortfall_factor ** (rungs below min_rung)
       hours       = unknown_hours_factor if life-threatening and no 24x7 claim
-      timeliness  = late + (1 - late) × exp(-minutes / tau)   (or linear)
+      timeliness  = share of benefit left after (onset_min + minutes): the published
+                    curve named in conditions.csv time_curve (time_curves.csv), else the
+                    assumed fallback  late + (1 - late) × exp(-t / tau)
+                    For a life-threatening condition this is multiplied by the trip-risk
+                    curve over the trip minutes alone (cfg.trip_risk_curve).
+    In a red case P(service exists) uses the cautious lower bound (cfg.cautious_for_red).
     """
     c = s.candidates
     cond = s.conditions[s.conditions["p"] >= cfg.min_condition_probability].reset_index(drop=True)
     s.conditions["scored"] = s.conditions["condition"].isin(cond["condition"])
     ids = c["facility_id"]
     cl = s.claims[s.claims["facility_id"].isin(ids)].copy()
-    cl["p_exists"] = p_service_exists(cl, cfg) if len(cl) else pd.Series(dtype=float)
+    cautious = bool(cfg.cautious_for_red and s.is_red)
+    cl["p_exists"] = p_service_exists(cl, cfg, s.kb, cautious) if len(cl) else pd.Series(dtype=float)
     services = sorted(set(s.kb.services) | set(cl["service"].unique()))
-    p_none = cfg.p_service_by_strength[None]
+    p_none = strength_table(cfg, s.kb, cautious)[None]
     P = (cl.pivot_table(index="facility_id", columns="service", values="p_exists", aggfunc="max")
            .reindex(index=ids, columns=services).fillna(p_none))
     has24 = (cl[cl.get("hours_claim", pd.Series("", index=cl.index)).eq("24x7")]
@@ -321,7 +376,8 @@ def care_probability(s: State, cfg: Config) -> State:
 
     level = pd.to_numeric(c["care_level"], errors="coerce").to_numpy(float)
     minutes = c["minutes"].to_numpy(float)
-    cap, rung, hours, timely, best = {}, {}, {}, {}, {}
+    delay = minutes + max(float(s.onset_min or 0), 0.0)
+    cap, rung, hours, timely, best, basis = {}, {}, {}, {}, {}, {}
     for r in cond.itertuples():
         capv = np.ones(len(c))
         picks = [[] for _ in range(len(c))]
@@ -347,14 +403,33 @@ def care_probability(s: State, cfg: Config) -> State:
         else:
             hf = np.ones(len(c))
         cap[r.condition], rung[r.condition], hours[r.condition] = capv, rf, hf
-        timely[r.condition] = timeliness(minutes, float(r.tau_min), cfg, getattr(r, "late_benefit", None))
+        curve = s.kb.curves.get(getattr(r, "time_curve", None)) if cfg.use_published_time_curves else None
+        if curve:
+            timely[r.condition] = curve_value(curve, delay, s.kb.curves)
+            basis[r.condition] = {"status": "published", "label": curve["label"], "source": curve["source"],
+                                  "url": curve.get("url")}
+        else:
+            timely[r.condition] = timeliness(delay, float(r.tau_min), cfg, getattr(r, "late_benefit", None))
+            basis[r.condition] = {"status": "assumed", "source": None, "url": None,
+                                  "label": f"Assumed: benefit fades over about {float(r.tau_min):.0f} min"}
+        trip = s.kb.curves.get(cfg.trip_risk_curve) if cfg.trip_risk_curve else None
+        if trip and r.life_threatening and getattr(r, "time_curve", None) != cfg.trip_risk_curve:
+            timely[r.condition] = timely[r.condition] * curve_value(trip, minutes, s.kb.curves)
+            basis[r.condition]["trip_risk"] = ("Plus the risk of the trip itself: " + trip["label"].lower()
+                                               + " (measured for major injury, assumed for other emergencies)")
         best[r.condition] = picks
     mk = lambda d: pd.DataFrame(d, index=c.index)
     q = mk(cap) * mk(rung) * mk(hours) * mk(timely)
     s.care = {"q": q, "capability": mk(cap), "rung": mk(rung), "hours": mk(hours),
               "timely": mk(timely), "best_service": best, "p_service": P.reset_index(drop=True),
-              "conditions": cond}
-    s.log("care_probability", f"scored {len(c)} facilities against {len(cond)} conditions")
+              "conditions": cond, "time_basis": basis, "cautious": cautious}
+    tbl = strength_table(cfg, s.kb, cautious)
+    s.log("care_probability", f"scored {len(c)} facilities against {len(cond)} conditions; "
+          f"chance a claimed service is real: strong {tbl['strong']:.2f}, moderate {tbl['moderate']:.2f}, "
+          f"weak {tbl['weak']:.2f} ("
+          + ("cautious lower bound of the hand-check estimate, because this is a red case"
+             if cautious else "hand-check estimate") + "); "
+          f"{sum(b['status'] == 'published' for b in basis.values())} of {len(basis)} time curves from published studies")
     return s
 
 
@@ -408,6 +483,31 @@ def travel_burden(s: State, cfg: Config) -> State:
     s.ranked = c
     t = c.iloc[0]
     s.log("travel_burden", f"travel penalty up to {k:.3f}; top now {t['name']} ({t['minutes']:.0f} min)")
+    return s
+
+
+# ---------------------------------------------------------------------------
+# 8c. nearer_on_ties
+# ---------------------------------------------------------------------------
+def nearer_on_ties(s: State, cfg: Config) -> State:
+    """reads ranked, is_red; re-ranks: in a red case, facilities scoring within
+    nearer_on_ties_margin of the best are ordered by minutes (soonest first).
+
+    The published delay curves describe patients who reached care, so they
+    understate the risk of the trip itself. When the scores can't separate
+    two hospitals, the nearer one goes first. Remove this step to rank on score alone.
+    """
+    c = s.ranked
+    if c is None or len(c) < 2 or not s.is_red or cfg.nearer_on_ties_margin <= 0:
+        return s
+    best = c["score"].max()
+    tied = c["score"] >= best - cfg.nearer_on_ties_margin
+    c = pd.concat([c[tied].sort_values(["minutes", "score"], ascending=[True, False]), c[~tied]])
+    moved = c.index[0] != s.ranked.index[0]
+    c["rank"] = np.arange(1, len(c) + 1)
+    s.ranked = c
+    s.log("nearer_on_ties", f"{int(tied.sum())} facilities within {cfg.nearer_on_ties_margin} of the best score; "
+          + (f"nearest of them, {c.iloc[0]['name']}, moved to first" if moved else "order unchanged"))
     return s
 
 
@@ -481,7 +581,7 @@ def rule_stabilise_and_transfer(s: State, cfg: Config) -> None:
 def rule_close_call(s: State, cfg: Config) -> None:
     if s.ranked is not None and len(s.ranked) >= 2:
         a, b = s.ranked.iloc[0], s.ranked.iloc[1]
-        if a["score"] - b["score"] < cfg.close_call_margin:
+        if abs(a["score"] - b["score"]) < cfg.close_call_margin:
             s.alert("close_call", "info",
                     f"{a['name']} and {b['name']} are nearly tied; call ahead to check which can see you sooner.")
 
@@ -552,6 +652,7 @@ def explain(s: State, cfg: Config) -> State:
                 "hours_factor": round(float(s.care["hours"].at[idx, cr.condition]), 3),
                 "timeliness": round(float(s.care["timely"].at[idx, cr.condition]), 3),
                 "p_care": round(float(s.care["q"].at[idx, cr.condition]), 3),
+                "time_basis": s.care.get("time_basis", {}).get(cr.condition),
                 "contribution": round(float(s.care["contribution"].at[idx, cr.condition]), 4),
                 "services": [{"service": a, "p_exists": round(b, 3), "credit": cr, "claim_strength": st,
                               "quote": qt} for a, b, cr, st, qt in picks],

@@ -63,8 +63,20 @@ class Config:
 
     # ---- step 7: care_probability -----------------------------------------
     # P(the facility really offers the service | how it claims it).
-    p_service_by_strength: dict = field(default_factory=lambda: {
-        "strong": 0.85, "moderate": 0.70, "weak": 0.40, None: 0.03})
+    # Measured, not guessed: knowledge/claim_reliability.csv holds the hand-check
+    # counts (strong 20/20, moderate 16/20, weak 7/20) and the estimate is the
+    # Beta-Binomial mean with a uniform prior: 0.95 / 0.77 / 0.36.
+    # Set this dict (e.g. {"strong": 0.85, "moderate": 0.7, "weak": 0.4}) to override the table.
+    p_service_by_strength: dict | None = None
+    # A facility that makes no claim for the service (assumed, not measured).
+    p_no_claim: float = 0.03
+    # In a red case, plan on the cautious side of the error bar: this quantile of
+    # the Beta posterior instead of the mean. The lower quartile (0.25) gives
+    # 0.94 / 0.72 / 0.29. A harsher 0.05 gives 0.87 / 0.61 / 0.21, which with only
+    # 20 checked claims per group mostly punishes our small sample and sends
+    # people on much longer trips.
+    cautious_for_red: bool = True
+    cautious_quantile: float = 0.25
     # Verification status adjusts that: verified sets a floor, contradicted halves.
     verified_floor: float = 0.97
     externally_supported_bonus: float = 0.05
@@ -78,11 +90,23 @@ class Config:
     # For life-threatening conditions, a facility that doesn't say it runs the
     # needed service 24x7 gets this factor (we don't know it's open now).
     unknown_hours_factor: float = 0.9
-    # Timeliness: how much of the benefit of care survives the trip.
+    # Timeliness: how much of the benefit of care survives the delay
+    # (time since onset + wait + trip). A condition with a time_curve in
+    # conditions.csv uses that published curve (knowledge/time_curves.csv).
+    # The settings below are the fallback for conditions with no published
+    # curve yet, and are assumed:
     #   timeliness = late + (1 - late) * decay(minutes / tau)
     # decay is "exp": exp(-x) or "linear": max(0, 1 - x / 2). `late` is the
-    # share of benefit that late care still gives (conditions.csv column
-    # late_benefit overrides it per condition).
+    # share of benefit that late care still gives.
+    use_published_time_curves: bool = True
+    # Trip risk. The condition curves above come from patients who reached a
+    # hospital, so they say nothing about getting worse on the way. For every
+    # life-threatening condition the trip itself (wait + travel, not time since
+    # onset) is also charged with this curve from time_curves.csv: "trauma" is
+    # Gauss 2019, odds of death up 4% per 10 minutes before hospital. Measured
+    # for major injury; using it for other emergencies is our assumption.
+    # None switches it off. Not applied to a condition that already uses this curve.
+    trip_risk_curve: str | None = "trauma"
     timeliness_curve: str = "exp"
     late_care_benefit: float = 0.25
 
@@ -112,6 +136,11 @@ class Config:
         r"|\bhair\b|cosmetic|psychiatr|de-?addiction|rehab|ortho(?:paedic|pedic)? cent")
     single_specialty_name_exempt: str = r"multi|general|medical college"
     close_call_margin: float = 0.03
+    # Red case: among facilities whose score is within this margin of the best,
+    # the one reached soonest is ranked first. The published delay curves come
+    # from patients who reached care, so they understate the risk of a long
+    # trip; when the evidence can't separate two hospitals, go to the nearer.
+    nearer_on_ties_margin: float = 0.03
 
     # ---- helpers ----------------------------------------------------------
     def replace(self, **kw) -> "Config":
@@ -124,7 +153,7 @@ class Config:
                   "stabilise_claim_strengths", "single_specialty_kinds"):
             if k in data:
                 data[k] = tuple(data[k])
-        if "p_service_by_strength" in data:
+        if data.get("p_service_by_strength") is not None:
             data["p_service_by_strength"] = {
                 (None if k in ("null", "none", "None") else k): v
                 for k, v in data["p_service_by_strength"].items()}
@@ -132,6 +161,7 @@ class Config:
 
     def to_dict(self) -> dict:
         d = dataclasses.asdict(self)
-        d["p_service_by_strength"] = {("none" if k is None else k): v
-                                      for k, v in self.p_service_by_strength.items()}
+        if self.p_service_by_strength is not None:
+            d["p_service_by_strength"] = {("none" if k is None else k): v
+                                          for k, v in self.p_service_by_strength.items()}
         return d
