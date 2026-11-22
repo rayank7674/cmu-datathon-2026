@@ -14,7 +14,7 @@
 # MAGIC | `vf_gold.state_public_health_capacity` | one row per state (36) | government beds by facility type, PHC doctors and CHC specialists: required, in position, shortfall |
 # MAGIC | `vf_gold.rhs_checks` | one row per check | measured validation |
 # MAGIC
-# MAGIC **Linking rule (same as notebook 11: never the name alone).** An RHS district links to a map district only when the state is the same and either the names are the same, or the RHS name is one the existing crosswalk already links (PIN-code or NFHS-5 district lists) in that state. No fuzzy matching. Anything else is left unlinked and listed.
+# MAGIC **Linking rule (same as notebook 11: never the name alone).** An RHS district links to a map district only when the state is the same and either the names are the same, or the RHS name is one the existing crosswalk already links (PIN-code or NFHS-5 district lists) in that state. No fuzzy matching. After that, 28 names were confirmed by hand on 2026-11-22 (clear spelling variants and renames, each recorded with its reason in `link_method`). Anything else is left unlinked and listed.
 # MAGIC
 # MAGIC **Reading the comparison.** These are counts of government facilities. The Virtue Foundation data is mostly private facilities (8,835 private, 467 public, 687 unknown), so the two columns are not the same set and one is not a share of the other. The comparison shows how much of a district's care our data cannot see. Counts are for March 2022 and districts have changed since.
 
@@ -53,6 +53,45 @@ for (ks, kd), g in cw.groupby(["ks", "kd"]):
     by_cw[(ks, kd)] = (ids, "/".join(sorted(set(g["source_list"]))))
 
 import difflib
+# Confirmed by hand on 2026-11-22 (team decision): clear spelling variants and renames within the same state only.
+# (RHS state, RHS district): (map state, map district, reason)
+SPELL = "same district, spelling variant"
+MANUAL = {
+    ("Chhattisgarh", "Garyaband"): ("Chhattisgarh", "Gariaband", SPELL),
+    ("Chhattisgarh", "Korya"): ("Chhattisgarh", "Koriya", SPELL),
+    ("Chhattisgarh", "Mungali"): ("Chhattisgarh", "Mungeli", SPELL),
+    ("Chhattisgarh", "Kanker"): ("Chhattisgarh", "Uttar Bastar Kanker", "same district; the map uses the full official name"),
+    ("Chhattisgarh", "Kawardha"): ("Chhattisgarh", "Kabeerdham", "rename: Kawardha district is officially Kabirdham"),
+    ("Gujarat", "Chhotaudepur"): ("Gujarat", "Chhota Udaipur", SPELL),
+    ("Jammu & Kashmir", "Budgam"): ("Jammu and Kashmir", "Badgam", SPELL),
+    ("Jammu & Kashmir", "Poonch"): ("Jammu and Kashmir", "Punch", SPELL),
+    ("Jammu & Kashmir", "Shopian"): ("Jammu and Kashmir", "Shupiyan", SPELL),
+    ("Jharkhand", "Pashchmi Singhbhum"): ("Jharkhand", "Pashchimi Singhbhum", SPELL),
+    ("Jharkhand", "Purbi Singhbum"): ("Jharkhand", "Purbi Singhbhum", SPELL),
+    ("Karnataka", "Bagalkote"): ("Karnataka", "Bagalkot", SPELL),
+    ("Madhya Pradesh", "Agar Malwa"): ("Madhya Pradesh", "Agar", "same district; the map uses the short name"),
+    ("Tamil Nadu", "Kanyakumari"): ("Tamil Nadu", "Kanniyakumari", SPELL),
+    ("Tamil Nadu", "Pudukottai"): ("Tamil Nadu", "Pudukkottai", SPELL),
+    ("Tamil Nadu", "Thirupattur"): ("Tamil Nadu", "Tirupathur", SPELL),
+    ("Tamil Nadu", "Thoothukudi"): ("Tamil Nadu", "Thoothukkudi", SPELL),
+    ("Tamil Nadu", "Tiruchirapalli"): ("Tamil Nadu", "Tiruchirappalli", SPELL),
+    ("Tamil Nadu", "Tirupur"): ("Tamil Nadu", "Tiruppur", SPELL),
+    ("Tamil Nadu", "Tiruvallur"): ("Tamil Nadu", "Thiruvallur", SPELL),
+    ("Tamil Nadu", "Tiruvarur"): ("Tamil Nadu", "Thiruvarur", SPELL),
+    ("Uttar Pradesh", "Hathras"): ("Uttar Pradesh", "Mahamaya Nagar", "rename: Hathras district was called Mahamaya Nagar until 2012; the map keeps the old name"),
+    ("West Bengal", "Malda"): ("West Bengal", "Maldah", SPELL),
+    ("West Bengal", "North 24 Parganas"): ("West Bengal", "North Twenty Four Parganas", SPELL),
+    ("West Bengal", "South 24 Parganas"): ("West Bengal", "South Twenty Four Parganas", SPELL),
+    ("West Bengal", "Paschim Bardhhaman"): ("West Bengal", "Paschim Barddhaman", SPELL),
+    ("West Bengal", "Purba Bardhhaman"): ("West Bengal", "Barddhaman", "Barddhaman was split in 2017; the map has Paschim Barddhaman as its own district, so the district it still calls Barddhaman is Purba Bardhaman"),
+    ("Puducherry", "Yanam"): ("Andhra Pradesh", "Yanam", "same district; Yanam is a Puducherry enclave inside Andhra Pradesh and the map assigns states by position"),
+}
+# Looked at by hand and deliberately left unlinked.
+LEFT = {
+    ("Nagaland", "Noklak"): "created in 2021 out of Tuensang; the map has no separate district and the Tuensang count is already linked",
+    ("Punjab", "Malerkotla"): "created in 2021 out of Sangrur; the map has no separate district and the Sangrur count is already linked",
+    ("Telangana", "Hanumakonda"): "Warangal Urban was renamed Hanumakonda in 2021 and its boundary with Warangal changed at the same time, so the map district is not the same area",
+}
 links, issues = [], []
 for _, r in raw.iterrows():
     ks, kd = norm(r["state"]), norm(r["district"])
@@ -61,13 +100,18 @@ for _, r in raw.iterrows():
     if not ids and (ks, kd) in by_cw:
         ids, lists = by_cw[(ks, kd)]
         method = f"same state + name already linked by the crosswalk ({lists})"
+    if not ids and (r["state"], r["district"]) in MANUAL:
+        ms, md, reason = MANUAL[(r["state"], r["district"])]
+        ids = by_name.get((norm(ms), norm(md)))
+        method = f"confirmed by hand 2026-11-22: {reason} (map name: {md})"
     if ids and len(ids) == 1:
         links.append(dict(rhs_state=r["state"], rhs_district=r["district"], polygon_district_id=ids[0], link_status="linked", link_method=method))
     else:
         names = poly[poly["ks"] == ks]
         near = difflib.get_close_matches(kd, list(names["kd"]), n=1, cutoff=0.0)
         near_name = names[names["kd"] == near[0]]["district_name"].iloc[0] if near else None
-        why = ("more than one map district has this name in the state" if ids else
+        why = LEFT.get((r["state"], r["district"])) and ("checked by hand 2026-11-22, left unlinked: " + LEFT[(r["state"], r["district"])])
+        why = why or ("more than one map district has this name in the state" if ids else
                ("no map district in this state" if names.empty else "no map district with this name in the state; not guessed"))
         links.append(dict(rhs_state=r["state"], rhs_district=r["district"], polygon_district_id=None, link_status="unlinked", link_method=None))
         issues.append(dict(list="rhs_2021_22", state=r["state"], name=r["district"], issue="unlinked", detail=why, nearest_polygon_name=near_name))
@@ -180,6 +224,9 @@ UNION ALL SELECT 8, 'map districts with government counts / without', concat(sum
 UNION ALL SELECT 10, 'state rows loaded / states', concat(count(*), ' / ', count(DISTINCT state)), count(*) = 1692 AND count(DISTINCT state) = 36 FROM workspace.vf_bronze.ext_rhs_state_beds_staff_raw
 UNION ALL SELECT 11, 'blank values turned into zero (must be 0)', CAST(count(*) AS STRING), count(*) = 0 FROM workspace.vf_bronze.ext_rhs_state_beds_staff_raw WHERE value_note IS NOT NULL AND value IS NOT NULL
 UNION ALL SELECT 12, 'all-India CHC specialists: required / in position / shortfall', concat(sum(chc_specialists_required), ' / ', sum(chc_specialists_in_position), ' / ', sum(chc_specialists_shortfall)), true FROM workspace.vf_gold.state_public_health_capacity
+UNION ALL SELECT 13, 'links confirmed by hand / map districts given two RHS districts by a hand link', concat((SELECT count(*) FROM workspace.vf_gold.district_rhs_crosswalk WHERE link_method LIKE 'confirmed by hand%'), ' / ',
+       (SELECT count(*) FROM (SELECT polygon_district_id FROM workspace.vf_gold.district_rhs_crosswalk WHERE link_status = 'linked' GROUP BY 1 HAVING count(*) > 1 AND sum(CAST(link_method LIKE 'confirmed by hand%' AS INT)) > 0))),
+       (SELECT count(*) FROM (SELECT polygon_district_id FROM workspace.vf_gold.district_rhs_crosswalk WHERE link_status = 'linked' GROUP BY 1 HAVING count(*) > 1 AND sum(CAST(link_method LIKE 'confirmed by hand%' AS INT)) > 0)) = 0
 UNION ALL SELECT 9, 'district_context unchanged', CAST(count(*) AS STRING), count(*) = 735 FROM workspace.vf_gold.district_context
 """)
 out = {"checks": [r.asDict() for r in spark.sql("SELECT * FROM workspace.vf_gold.rhs_checks ORDER BY n").collect()],
