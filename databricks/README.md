@@ -361,6 +361,7 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-21 | Team decision: duplicates above 80% confidence are one centre with the higher rung. `vf_silver.facility_canonical` and the per-centre views `facility_level_canonical`, `facility_service_canonical` added (07, 09). See section 13.7 |
 | 2026-11-21 | Notebook 09 now reads notebook 10's `ext_facility_matches`, accepted matches only: 133 Wikidata matches support that a facility exists (never a service) |
 | 2026-11-21 | Chunk E: district polygons, 1 km population grid, crosswalk, `district_context`, straight-line access grid, evidence gap, critical zones, routing function (11). See section 15 |
+| 2026-11-22 | Chunk F: app shell deployed as Databricks App `vf-facility-finder` (folder `app/`); `vf_gold.feedback_reports` created. Ranking is a labelled placeholder. See section 16 |
 
 ## 12. Implemented: service search tables (chunk C, notebook 09)
 
@@ -733,6 +734,55 @@ Population total plausible (1.30 to 1.45 billion); every cell has a district and
 - `state_name` in the polygon tables is the boundary file's spelling (with diacritics, and Telangana under Andhra Pradesh in the state file). Use `state` for joins and display.
 - The Google routing path is written but was not called (no key). The dashboard has no geography page yet.
 
+
+---
+
+## 16. Implemented: app shell (chunk F, folder `app/`)
+
+A Databricks App (Streamlit) named `vf-facility-finder`. It is **facility discovery, not medical triage**, and says so on every screen.
+
+### 16.1 Files
+
+| File | What it holds |
+| --- | --- |
+| `app/app.py` | The three tabs, search, cards, maps, feedback writes |
+| `app/ranking.py` | `rank(candidates, context)`, the only place results are ordered, plus the per-service minimum care level |
+| `app/app.yaml` | Start command and the SQL warehouse resource (`sql-warehouse`, CAN_USE) |
+| `app/requirements.txt` | Streamlit (pinned to the tested version), SQL connector, pydeck |
+
+### 16.2 What each tab does
+
+- **Policy makers.** National map: one circle per district at its centre, sized by population, shaded by population-weighted straight-line km to the nearest facility claiming the chosen service (`district_service_access`), with a switch between "any claim" and "better-evidenced claims only". District zoom: 5 km blocks from `access_evidence_gap`, critical zones from `critical_zones` (8 of 14 services), and facility points. If the geography tables are missing, both maps fall back to facility points only.
+- **EMRs.** Same search, shown as a compact table (distance, care level, claim strength, checked or not, "open now: unknown", phone, quote), with a details panel.
+- **Patients.** Plain-language cards: what the facility says, the quote and which field it came from, a link to the page the record was collected from, how sure we are, whether anyone checked, phone, and a "Why this hospital?" section listing what is unknown.
+
+Each tab has a small optional profile form. Answers live in the browser session only and are never written to a table. The placeholder ranking ignores them; the patient's insurance answer only adds a note ("says it accepts PM-JAY, its own claim").
+
+### 16.3 Choices and why
+
+- **One ranking function, labelled PLACEHOLDER.** Order: care level meets the usual minimum for the service, then direct claims (strong or moderate) before label-only ones (weak), then straight-line distance. The middle step was added after an eye hospital with only an "emergency eye care" tag came first for emergency care. The minimum levels in `ranking.MIN_LEVEL` are assumptions, not rules. Replacing the body of `rank()` changes nothing else in the app.
+- **Suspect or invalid locations are never ranked by distance.** They are listed separately, only when their address is in the searched district, with a warning.
+- **Availability is always "unknown".** No source tells us whether a service is working today, so the app never implies it.
+- **The source link is the record's first source page**, not proof of the specific quote. The card words it as "page this record was collected from".
+- **The safety block ("Call 108, 102 for pregnancy or newborn") is fixed** at the top of the page and repeated at the top of every result. It cannot be collapsed.
+- **Feedback is recorded, not used.** The four buttons append to `vf_gold.feedback_reports` (report_id, created_at, facility_id, facility_name, service, report_type, label = 'unverified report', source_tab). Nothing reads it for ranking. No profile data is stored with a report.
+- **Search uses the per-centre view** `facility_service_canonical`, so likely duplicates appear once.
+- **District and PIN searches measure from the centre of the area**, and the app says the distances are rough.
+
+### 16.4 Access
+
+The app runs as its own service principal, which was granted USE CATALOG on `workspace`, USE SCHEMA and SELECT on `vf_gold` and `vf_silver`, and MODIFY on `vf_gold.feedback_reports`. Only the creator can open the app until others are added under the app's Permissions.
+
+### 16.5 Tested
+
+Run locally against the real tables with a headless browser: all three tabs render with no exceptions, a patient search for emergency care near Patna returns 69 facilities within 50 km, and a feedback click wrote one row (then removed). The deployed copy starts successfully; it has not been opened by a signed-in user from this side.
+
+### 16.6 Limits
+
+- Straight-line distance only, and only to the roughly 10,000 facilities in this dataset. Real facilities nearby may be missing.
+- No travel time, cost, bed availability or quality measure yet.
+- The district map uses centre points, not boundaries.
+- To redeploy after an edit: upload the files to `app/` and deploy the app again from its page under Compute, Apps.
 ---
 
 ## Sources

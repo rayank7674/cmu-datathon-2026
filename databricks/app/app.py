@@ -1,0 +1,729 @@
+"""Facility Finder - app shell (chunk F).
+
+A Databricks App (Streamlit). Service + location -> candidate facilities, each
+with the claim, the quoted evidence, a source link, confidence, verification
+status and what is still unknown.
+
+This is facility discovery, NOT medical triage. Ranking is a labelled
+placeholder that lives in ranking.rank().
+"""
+import os
+import uuid
+from datetime import datetime, timezone
+
+import numpy as np
+import pandas as pd
+import pydeck as pdk
+import streamlit as st
+from databricks import sql
+from databricks.sdk.core import Config
+
+from ranking import MIN_LEVEL, PLACEHOLDER_NOTE, haversine_km, rank
+
+CATALOG = os.getenv("VF_CATALOG", "workspace")
+GOLD = f"{CATALOG}.vf_gold"
+SILVER = f"{CATALOG}.vf_silver"
+FEEDBACK_TABLE = f"{GOLD}.feedback_reports"
+
+st.set_page_config(page_title="Facility Finder (India)", page_icon="🏥", layout="wide")
+
+
+# --------------------------------------------------------------------------
+# Data access
+# --------------------------------------------------------------------------
+@st.cache_resource
+def _cfg():
+    return Config()
+
+
+def _connect():
+    cfg = _cfg()
+    wh = os.environ["DATABRICKS_WAREHOUSE_ID"]
+    return sql.connect(
+        server_hostname=cfg.host.replace("https://", "").rstrip("/"),
+        http_path=f"/sql/1.0/warehouses/{wh}",
+        credentials_provider=lambda: cfg.authenticate,
+        use_cloud_fetch=False,
+    )
+
+
+def query(q: str, params: dict | None = None) -> pd.DataFrame:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(q, params or {})
+        rows = cur.fetchall()
+        cols = [d[0] for d in cur.description]
+    return pd.DataFrame([list(r) for r in rows], columns=cols)
+
+
+def execute(q: str, params: dict | None = None) -> None:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(q, params or {})
+
+
+def optional(fn):
+    """Run a loader; return None when its table is missing or unreadable."""
+    try:
+        df = fn()
+        return df if df is not None and len(df) else None
+    except Exception:  # table not built yet, or no permission
+        return None
+
+
+@st.cache_data(ttl=3600, show_spinner="Loading service claims...")
+def load_claims() -> pd.DataFrame:
+    df = query(f"""
+        SELECT c.facility_id, c.name, c.state, c.district, c.facility_type, c.level_kind,
+               c.service, c.service_label, c.care_level, c.service_specific_level,
+               c.claim_status, c.claim_strength, c.claim_basis,
+               c.supporting_quote, c.source_field, c.negating_quote, c.plausibility_flag,
+               c.level_confidence, CAST(c.quality_score AS DOUBLE) AS quality_score,
+               c.verification_status, c.verification_source,
+               CAST(c.verification_date AS STRING) AS verification_date,
+               c.contradiction_flag, c.facility_existence_status, c.facility_existence_source,
+               c.latitude, c.longitude, c.location_quality_flag,
+               c.contact_verification_status, c.contact_phone, c.availability_status,
+               c.hours_claim, c.hours_quote, c.evidence_facility_id, c.merged_records,
+               f.official_website, f.source_urls[0] AS source_url,
+               l.city, l.operator_type, l.capacity_beds, l.pmjay_claimed, l.cghs_claimed
+        FROM {GOLD}.facility_service_canonical c
+        LEFT JOIN {SILVER}.facilities f ON f.facility_id = c.evidence_facility_id
+        LEFT JOIN {GOLD}.facility_level_canonical l ON l.facility_id = c.facility_id
+        WHERE c.claim_detected
+    """)
+    for col in ("latitude", "longitude", "care_level", "quality_score"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=3600, show_spinner="Loading facilities...")
+def load_facilities() -> pd.DataFrame:
+    df = query(f"""
+        SELECT facility_id, name, facility_type, district, state, latitude, longitude,
+               care_level, level_kind
+        FROM {GOLD}.facility_level_canonical
+        WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+    """)
+    for col in ("latitude", "longitude", "care_level"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=3600, show_spinner="Loading districts...")
+def load_districts() -> pd.DataFrame:
+    df = query(f"""
+        SELECT district_id, district_name, state_name, state, centre_lat, centre_lon,
+               population_2020, area_km2, facilities_located,
+               pct_facilities_suspect_or_no_location, deprivation_score, deprivation_tercile,
+               nfhs_status, nfhs_institutional_births_pct, nfhs_health_insurance_pct,
+               facilities_per_100k, hospitals_rung3plus_per_100k
+        FROM {GOLD}.district_context
+    """)
+    for col in df.columns:
+        if col not in ("district_id", "district_name", "state_name", "state",
+                       "deprivation_tercile", "nfhs_status"):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=3600, show_spinner="Loading district access figures...")
+def load_district_access() -> pd.DataFrame:
+    df = query(f"""
+        SELECT district_id, service, pop_weighted_km_claimed, pop_weighted_km_better,
+               pct_pop_within_30km_claimed, pct_pop_within_30km_better,
+               pop_beyond_30km_claimed, pop_beyond_60km_claimed
+        FROM {GOLD}.district_service_access
+    """)
+    for col in df.columns[2:]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=3600, show_spinner="Loading map blocks...")
+def load_blocks(district_id: str, service: str) -> pd.DataFrame:
+    df = query(f"""
+        SELECT latitude, longitude, population, km_claimed, km_better_evidenced, gap_flag
+        FROM {GOLD}.access_evidence_gap
+        WHERE district_id = :d AND service = :s
+    """, {"d": district_id, "s": service})
+    for col in ("latitude", "longitude", "population", "km_claimed", "km_better_evidenced"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_zones(district_id: str, service: str) -> pd.DataFrame:
+    df = query(f"""
+        SELECT latitude, longitude, population, zone_type, priority_rank,
+               straight_km_claimed, criteria
+        FROM {GOLD}.critical_zones
+        WHERE district_id = :d AND service = :s
+    """, {"d": district_id, "s": service})
+    for col in ("latitude", "longitude", "population", "straight_km_claimed"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=3600)
+def lookup_pin(pin: str) -> pd.DataFrame:
+    return query(f"""
+        SELECT pincode, district, state, centroid_lat, centroid_lon
+        FROM {SILVER}.pincode WHERE pincode = :p
+    """, {"p": pin})
+
+
+@st.cache_resource
+def ensure_feedback_table() -> bool:
+    try:
+        query(f"SELECT 1 FROM {FEEDBACK_TABLE} LIMIT 1")
+        return True
+    except Exception:
+        pass
+    try:
+        execute(f"""
+            CREATE TABLE IF NOT EXISTS {FEEDBACK_TABLE} (
+              report_id STRING, created_at TIMESTAMP, facility_id STRING, facility_name STRING,
+              service STRING, report_type STRING, label STRING, source_tab STRING)
+        """)
+        return True
+    except Exception:
+        return False
+
+
+def save_feedback(facility_id, facility_name, service, report_type, tab):
+    """Append one unverified report. Never stores profile data. Never affects ranking."""
+    execute(f"""
+        INSERT INTO {FEEDBACK_TABLE}
+          (report_id, created_at, facility_id, facility_name, service, report_type, label, source_tab)
+        VALUES (:id, current_timestamp(), :f, :n, :s, :t, 'unverified report', :tab)
+    """, {"id": str(uuid.uuid4()), "f": facility_id, "n": facility_name, "s": service,
+          "t": report_type, "tab": tab})
+
+
+# --------------------------------------------------------------------------
+# Wording
+# --------------------------------------------------------------------------
+STRENGTH_PLAIN = {
+    "strong": "Stronger: the facility says this directly in two or more places.",
+    "moderate": "Medium: the facility says this directly in one place.",
+    "weak": "Weak: only a specialty label or indirect wording, not a direct statement.",
+}
+VERIFY_PLAIN = {
+    "inferred": "Not checked. This rests only on what the facility says about itself.",
+    "externally_supported": "An outside source supports this, but no one has confirmed the service itself.",
+    "verified": "Confirmed by an official source for this service.",
+    "claimed": "Not checked. This rests only on what the facility says about itself.",
+}
+FIELD_PLAIN = {"capability": "its capabilities list", "equipment": "its equipment list",
+               "procedure": "its procedures list", "specialty": "its specialty tags", "specialties": "its specialty tags",
+               "description": "its description"}
+FEEDBACK_TYPES = [("couldnt_treat", "Couldn't treat"), ("service_down", "Service down"),
+                  ("treated_ok", "Treated OK"), ("wrong_number", "Wrong number")]
+
+
+def safety_block():
+    st.error(
+        "**In an emergency, call 108** (102 for pregnancy or a newborn). Do not wait for this app.\n\n"
+        "This is a facility discovery tool, not medical triage. It cannot tell you what care you "
+        "need, and it does not know whether a service is open or working right now. "
+        "Phone the facility before you travel.",
+        icon="🚨",
+    )
+
+
+def clean(v):
+    return None if v is None or (isinstance(v, float) and np.isnan(v)) or str(v) in ("None", "nan", "") else v
+
+
+def source_link(r):
+    url = clean(r.get("source_url"))
+    site = clean(r.get("official_website"))
+    parts = []
+    if url:
+        parts.append(f"[page this record was collected from]({url})")
+    if site:
+        href = site if str(site).startswith("http") else f"https://{site}"
+        parts.append(f"[facility website]({href})")
+    return " · ".join(parts) if parts else "no source link in the dataset"
+
+
+def unknowns(r):
+    out = ["Whether the service is available or working today: **unknown**."]
+    if r["verification_status"] != "verified":
+        out.append("Whether the facility really provides this service: not confirmed by any official source.")
+    if r["hours_claim"] != "24x7":
+        out.append("Opening hours: unknown.")
+    else:
+        out.append("It says it is open 24x7, but that is its own claim.")
+    if clean(r["contact_phone"]) is None:
+        out.append("Phone number: none in the dataset.")
+    else:
+        out.append("Whether the phone number still works: not checked.")
+    if r["facility_existence_status"] != "externally_supported":
+        out.append("Whether the facility exists at this location: not confirmed by an outside source.")
+    if r["location_quality_flag"] != "good":
+        out.append("Its map location looks wrong, so distance is not shown.")
+    out.append("Cost, beds free and waiting time: unknown.")
+    return out
+
+
+# --------------------------------------------------------------------------
+# Shared search UI
+# --------------------------------------------------------------------------
+def location_input(key, districts):
+    mode = st.radio("Where are you starting from?", ["District", "PIN code", "Coordinates"],
+                    horizontal=True, key=f"{key}_mode")
+    if mode == "District":
+        if districts is None:
+            st.info("District list is not available yet. Use a PIN code or coordinates.")
+            return None
+        c1, c2 = st.columns(2)
+        states = sorted(districts["state_name"].dropna().unique())
+        state = c1.selectbox("State", states, key=f"{key}_state",
+                             index=states.index("Bihār") if "Bihār" in states else 0)
+        sub = districts[districts["state_name"] == state].sort_values("district_name")
+        names = sub["district_name"].tolist()
+        name = c2.selectbox("District", names, key=f"{key}_district",
+                            index=names.index("Patna") if "Patna" in names else 0)
+        row = sub[sub["district_name"] == name].iloc[0]
+        return {"lat": float(row["centre_lat"]), "lon": float(row["centre_lon"]),
+                "district": name, "label": f"centre of {name} district, {state}",
+                "approx": "Distances are measured from the centre of the district, so they are rough."}
+    if mode == "PIN code":
+        pin = st.text_input("6-digit PIN code", key=f"{key}_pin", max_chars=6, placeholder="e.g. 800001")
+        if not pin:
+            return None
+        if not (pin.isdigit() and len(pin) == 6):
+            st.warning("A PIN code has 6 digits.")
+            return None
+        hit = lookup_pin(pin)
+        if hit.empty or clean(hit.iloc[0]["centroid_lat"]) is None:
+            st.warning("That PIN code is not in the dataset's PIN list. Try the district or coordinates.")
+            return None
+        row = hit.iloc[0]
+        return {"lat": float(row["centroid_lat"]), "lon": float(row["centroid_lon"]),
+                "district": row["district"], "label": f"PIN {pin} ({row['district']}, {row['state']})",
+                "approx": "Distances are measured from the middle of the PIN code area, so they are rough."}
+    c1, c2 = st.columns(2)
+    lat = c1.number_input("Latitude", min_value=6.0, max_value=37.5, value=25.61, format="%.5f", key=f"{key}_lat")
+    lon = c2.number_input("Longitude", min_value=68.0, max_value=97.5, value=85.14, format="%.5f", key=f"{key}_lon")
+    return {"lat": float(lat), "lon": float(lon), "district": None,
+            "label": f"{lat:.4f}, {lon:.4f}", "approx": None}
+
+
+def search_form(key, claims, districts, default_radius=50):
+    services = (claims[["service", "service_label"]].drop_duplicates()
+                .sort_values("service_label"))
+    labels = dict(zip(services["service"], services["service_label"]))
+    c1, c2 = st.columns([2, 1])
+    opts = list(labels)
+    service = c1.selectbox("Service needed", opts, format_func=labels.get, key=f"{key}_service",
+                           index=opts.index("emergency") if "emergency" in opts else 0)
+    radius = c2.slider("Search within (km, straight line)", 10, 300, default_radius, 10, key=f"{key}_radius")
+    origin = location_input(key, districts)
+    if st.button("Find facilities", type="primary", key=f"{key}_go", disabled=origin is None):
+        st.session_state[f"{key}_search"] = {"service": service, "radius_km": radius, **origin}
+    return st.session_state.get(f"{key}_search"), labels
+
+
+def run_search(claims, search, profile):
+    cand = claims[claims["service"] == search["service"]]
+    return rank(cand, {**search, "profile": profile})
+
+
+def feedback_buttons(r, tab, key):
+    st.caption("Tell us what happened. Reports are stored as **unverified reports** and do not change the ranking.")
+    cols = st.columns(len(FEEDBACK_TYPES))
+    for col, (code, label) in zip(cols, FEEDBACK_TYPES):
+        if col.button(label, key=f"{key}_{code}", use_container_width=True):
+            try:
+                save_feedback(r["facility_id"], r["name"], r["service"], code, tab)
+                st.toast(f"Saved as an unverified report: {label}")
+            except Exception as e:
+                st.warning(f"Could not save the report ({type(e).__name__}).")
+
+
+def results_map(ranked, search, height=380):
+    pts = ranked.head(200)[["name", "latitude", "longitude", "km", "rank"]].copy()
+    pts["tip"] = pts.apply(lambda r: f"#{int(r['rank'])} {r['name']} · {r['km']:.0f} km", axis=1)
+    start = pd.DataFrame([{"latitude": search["lat"], "longitude": search["lon"], "tip": "Starting point"}])
+    layers = [
+        pdk.Layer("ScatterplotLayer", pts, get_position="[longitude, latitude]", get_fill_color=[42, 120, 214, 210],
+                  get_line_color=[255, 255, 255], stroked=True, line_width_min_pixels=1,
+                  radius_min_pixels=5, radius_max_pixels=9, get_radius=400, pickable=True),
+        pdk.Layer("ScatterplotLayer", start, get_position="[longitude, latitude]", get_fill_color=[30, 30, 30, 255],
+                  get_line_color=[255, 255, 255], stroked=True, line_width_min_pixels=2,
+                  radius_min_pixels=8, radius_max_pixels=10, get_radius=600, pickable=True),
+    ]
+    zoom = 9 if search["radius_km"] <= 30 else 8 if search["radius_km"] <= 80 else 6.5 if search["radius_km"] <= 160 else 5.5
+    st.pydeck_chart(pdk.Deck(layers=layers, tooltip={"text": "{tip}"},
+                             initial_view_state=pdk.ViewState(latitude=search["lat"], longitude=search["lon"], zoom=zoom)),
+                    height=height)
+    st.caption("Blue dots: facilities that claim the service. Black dot: your starting point. Hover a dot for its name.")
+
+
+def results_header(search, labels, ranked, unplaced):
+    safety_block()
+    st.subheader(f"{labels[search['service']]} near {search['label']}")
+    st.warning(PLACEHOLDER_NOTE, icon="⚠️")
+    notes = [f"{len(ranked)} facilities in this dataset say they offer this within {search['radius_km']} km (straight line)."]
+    if search.get("approx"):
+        notes.append(search["approx"])
+    notes.append("The dataset covers about 10,000 facilities, so real facilities nearby may be missing.")
+    st.caption(" ".join(notes))
+
+
+# --------------------------------------------------------------------------
+# Patient view
+# --------------------------------------------------------------------------
+def patient_card(r, profile, key):
+    with st.container(border=True):
+        top = st.columns([4, 1])
+        top[0].markdown(f"**{int(r['rank'])}. {r['name']}**  \n"
+                        f"{clean(r['level_kind']) or clean(r['facility_type']) or 'Facility'} · "
+                        f"{clean(r['district']) or 'district unknown'}, {str(r['state']).title()}")
+        top[1].metric("Straight line", f"{r['km']:.0f} km")
+
+        quote = clean(r["supporting_quote"])
+        field = FIELD_PLAIN.get(r["source_field"], f"its {r['source_field']} field")
+        st.markdown(f"**What it says:** it offers **{r['service_label'].lower()}**.")
+        if quote:
+            st.markdown(f"> “{quote}”\n>\n> from {field} · {source_link(r)}")
+        c1, c2 = st.columns(2)
+        c1.markdown(f"**How sure are we?**  \n{STRENGTH_PLAIN.get(r['claim_strength'], 'Unknown.')}")
+        c2.markdown(f"**Has anyone checked?**  \n{VERIFY_PLAIN.get(r['verification_status'], 'Not checked.')}")
+        if clean(r["plausibility_flag"]):
+            st.markdown(f"⚠️ **Treat with care:** {r['plausibility_flag']}.")
+
+        phone = clean(r["contact_phone"])
+        if phone:
+            st.markdown(f"📞 **Call before you go:** [{phone}](tel:{phone}) (number not checked)")
+        else:
+            st.markdown("📞 No phone number in the dataset.")
+
+        scheme = profile.get("insurance")
+        if scheme == "PM-JAY (Ayushman Bharat)":
+            st.markdown("🪪 It says it accepts PM-JAY (its own claim, not checked against the official list)."
+                        if r.get("pmjay_claimed") is True else "🪪 PM-JAY: unknown for this facility.")
+        elif scheme == "CGHS":
+            st.markdown("🪪 It says it is CGHS empanelled (its own claim, not checked)."
+                        if r.get("cghs_claimed") is True else "🪪 CGHS: unknown for this facility.")
+        elif scheme and scheme != "Prefer not to say":
+            st.markdown(f"🪪 {scheme}: unknown for this facility.")
+
+        with st.expander("Why this hospital?"):
+            st.markdown(r["rank_reason"])
+            st.markdown("**What we don't know**\n" + "\n".join(f"- {u}" for u in unknowns(r)))
+            if r["facility_existence_status"] == "externally_supported":
+                st.markdown(f"An outside source ({r['facility_existence_source']}) lists a facility with this "
+                            "name here. That supports that it exists, not that it offers this service.")
+            if clean(r["merged_records"]) and int(r["merged_records"]) > 1:
+                st.markdown(f"This entry combines {int(r['merged_records'])} records that look like the same centre.")
+            st.caption(PLACEHOLDER_NOTE)
+        feedback_buttons(r, "patients", key)
+
+
+def tab_patients(claims, districts):
+    st.markdown("Find facilities that say they offer a service near you. Always phone first.")
+    with st.expander("About you (optional, kept only for this visit and never saved)"):
+        c = st.columns(4)
+        profile = {
+            "age_band": c[0].selectbox("Age band", ["Prefer not to say", "0-4", "5-17", "18-39", "40-59", "60+"], key="p_age"),
+            "conditions": c[1].multiselect("Conditions", ["Pregnancy", "Diabetes", "Heart disease", "Kidney disease",
+                                                          "Cancer", "Disability", "Other"], key="p_cond"),
+            "insurance": c[2].selectbox("Insurance scheme", ["Prefer not to say", "None", "PM-JAY (Ayushman Bharat)",
+                                                             "CGHS", "ESI", "State scheme", "Private"], key="p_ins"),
+            "income_band": c[3].selectbox("Household income band", ["Prefer not to say", "Low", "Middle", "High"], key="p_inc"),
+        }
+        st.caption("These answers stay in this browser session. They are not written to any table. "
+                   "The placeholder ranking does not use them yet; the insurance answer only adds a note to each card.")
+    search, labels = search_form("p", claims, districts)
+    if not search:
+        return
+    ranked, unplaced = run_search(claims, search, profile)
+    st.divider()
+    results_header(search, labels, ranked, unplaced)
+    if ranked.empty:
+        st.info("No facility in this dataset says it offers this within that distance. "
+                "That does not mean there is none. Try a wider distance, or call 108.")
+    else:
+        left, right = st.columns([3, 2])
+        with right:
+            results_map(ranked, search)
+        with left:
+            n = st.session_state.get("p_show", 5)
+            for _, r in ranked.head(n).iterrows():
+                patient_card(r, profile, f"p_{r['facility_id']}")
+            if len(ranked) > n and st.button(f"Show more ({len(ranked) - n} left)", key="p_more"):
+                st.session_state["p_show"] = n + 5
+                st.rerun()
+    unplaced_block(unplaced)
+
+
+def unplaced_block(unplaced):
+    if unplaced is None or unplaced.empty:
+        return
+    with st.expander(f"{len(unplaced)} more in this district with an unreliable map location"):
+        st.caption("Their address says this district, but their map pin looks wrong, so no distance is shown.")
+        st.dataframe(unplaced[["name", "district", "care_level", "claim_strength", "contact_phone",
+                               "location_quality_flag"]].rename(columns={
+                                   "name": "Facility", "district": "District", "care_level": "Care level",
+                                   "claim_strength": "Claim strength", "contact_phone": "Phone",
+                                   "location_quality_flag": "Location"}),
+                     hide_index=True, use_container_width=True)
+
+
+# --------------------------------------------------------------------------
+# EMR view
+# --------------------------------------------------------------------------
+def tab_emrs(claims, districts):
+    st.markdown("Compact list for emergency medical responders and dispatchers. "
+                "Destination decisions stay with your protocol and medical direction.")
+    with st.expander("Crew profile (optional, kept only for this session)"):
+        c = st.columns(3)
+        profile = {
+            "role": c[0].selectbox("Role", ["Ambulance crew", "Dispatcher", "Hospital staff", "Other"], key="e_role"),
+            "vehicle": c[1].selectbox("Vehicle", ["Not applicable", "Basic life support", "Advanced life support",
+                                                  "Patient transport"], key="e_veh"),
+            "min_level_only": c[2].checkbox("Hide facilities below the usual care level", key="e_min"),
+        }
+    search, labels = search_form("e", claims, districts, default_radius=80)
+    if not search:
+        return
+    ranked, unplaced = run_search(claims, search, profile)
+    if profile["min_level_only"]:
+        ranked = ranked[ranked["level_meets"]]
+    st.divider()
+    results_header(search, labels, ranked, unplaced)
+    if ranked.empty:
+        st.info("No facility in this dataset claims this service within that distance.")
+        unplaced_block(unplaced)
+        return
+    table = pd.DataFrame({
+        "#": ranked["rank"],
+        "Facility": ranked["name"],
+        "km (straight)": ranked["km"].round(0),
+        "Care level": ranked["care_level"],
+        f"Meets level {MIN_LEVEL.get(search['service'], 3)}+": ranked["level_meets"].map({True: "yes", False: "no"}),
+        "Claim": ranked["claim_strength"],
+        "Checked": ranked["verification_status"].map({"inferred": "no (self-reported)",
+                                                      "externally_supported": "outside support",
+                                                      "verified": "verified"}).fillna("no"),
+        "Open now": "unknown",
+        "24x7 claim": ranked["hours_claim"].map({"24x7": "claims 24x7"}).fillna("unknown"),
+        "Phone (unchecked)": ranked["contact_phone"],
+        "District": ranked["district"],
+        "Evidence": ranked["supporting_quote"],
+    })
+    left, right = st.columns([3, 2])
+    with left:
+        st.dataframe(table.head(50), hide_index=True, use_container_width=True, height=380)
+    with right:
+        results_map(ranked.head(50), search)
+    st.markdown("**Details and report**")
+    top = ranked.head(50)
+    pick = st.selectbox("Facility", top["facility_id"].tolist(), key="e_pick",
+                        format_func=lambda i: "{rank}. {name}".format(**top[top["facility_id"] == i].iloc[0]))
+    r = top[top["facility_id"] == pick].iloc[0]
+    with st.container(border=True):
+        c1, c2, c3 = st.columns(3)
+        c1.markdown(f"**Claim:** {r['service_label']} ({r['claim_strength']}, {r['claim_basis']})  \n"
+                    f"**Quote:** “{clean(r['supporting_quote']) or 'none'}” ({r['source_field']})  \n"
+                    f"**Source:** {source_link(r)}")
+        c2.markdown(f"**Verification:** {r['verification_status']}"
+                    f"{' via ' + r['verification_source'] if clean(r['verification_source']) else ''}  \n"
+                    f"**Facility exists:** {r['facility_existence_status']}  \n"
+                    f"**Care level:** {clean(r['care_level']) or 'unknown'} ({r['level_confidence']} confidence)  \n"
+                    f"**Flag:** {clean(r['plausibility_flag']) or 'none'}")
+        c3.markdown(f"**Phone:** {clean(r['contact_phone']) or 'none'} (unchecked)  \n"
+                    f"**Availability now:** unknown  \n**Hours:** {r['hours_claim']}  \n"
+                    f"**Position:** {r['latitude']:.5f}, {r['longitude']:.5f}")
+        feedback_buttons(r, "emrs", f"e_{r['facility_id']}")
+    unplaced_block(unplaced)
+
+
+# --------------------------------------------------------------------------
+# Policy view
+# --------------------------------------------------------------------------
+BLUE_RAMP = [(205, 226, 251), (158, 197, 244), (109, 167, 236), (57, 135, 229),
+             (37, 106, 191), (24, 79, 149), (13, 54, 107)]
+KM_BREAKS = [10, 20, 30, 45, 60, 100]
+KM_LABELS = ["under 10", "10-20", "20-30", "30-45", "45-60", "60-100", "over 100"]
+
+
+def km_colour(km):
+    if km is None or np.isnan(km):
+        return [200, 200, 200, 160]
+    return [*BLUE_RAMP[int(np.searchsorted(KM_BREAKS, km, side="right"))], 215]
+
+
+def legend(extra=""):
+    chips = "".join(
+        f"<span style='display:inline-flex;align-items:center;margin-right:10px'>"
+        f"<span style='width:12px;height:12px;border-radius:2px;background:rgb{c};display:inline-block;margin-right:4px'></span>{lab}</span>"
+        for c, lab in zip(BLUE_RAMP, KM_LABELS))
+    st.markdown(f"<div style='font-size:0.8rem'>Straight-line km to the nearest facility claiming the service: {chips}{extra}</div>",
+                unsafe_allow_html=True)
+
+
+def tab_policy(claims, facilities, districts, access):
+    st.markdown("Where are people far from a facility that claims a service, and how much of that picture rests on "
+                "weak evidence? Distances are straight-line and only to the roughly 10,000 facilities in this dataset.")
+    with st.expander("Your role (optional, kept only for this session)"):
+        c = st.columns(2)
+        c[0].selectbox("Role", ["State health department", "District administration", "NGO / funder",
+                                "Researcher", "Other"], key="g_role")
+        c[1].text_input("Organisation (optional)", key="g_org")
+    services = claims[["service", "service_label"]].drop_duplicates().sort_values("service_label")
+    labels = dict(zip(services["service"], services["service_label"]))
+    c1, c2 = st.columns(2)
+    service = c1.selectbox("Service", list(labels), format_func=labels.get, key="g_service")
+    tier = c2.radio("Evidence tier", ["Any claim", "Better-evidenced claims only"], horizontal=True, key="g_tier",
+                    help="Better-evidenced = strong or moderate wording, a plausible facility type and a usable location. "
+                         "Still self-reported, not verified.")
+    km_col = "pop_weighted_km_claimed" if tier == "Any claim" else "pop_weighted_km_better"
+    pct_col = "pct_pop_within_30km_claimed" if tier == "Any claim" else "pct_pop_within_30km_better"
+    svc_fac = claims[(claims["service"] == service) & (claims["location_quality_flag"] == "good")]
+    if tier != "Any claim":
+        svc_fac = svc_fac[svc_fac["claim_strength"].isin(["strong", "moderate"]) & svc_fac["plausibility_flag"].isna()]
+
+    st.subheader("National overview")
+    if districts is None or access is None:
+        st.info("District access tables are not available, so the map shows facility points only.")
+        pts = svc_fac[["name", "latitude", "longitude"]].copy()
+        pts["tip"] = pts["name"]
+        st.pydeck_chart(pdk.Deck(
+            layers=[pdk.Layer("ScatterplotLayer", pts, get_position="[longitude, latitude]",
+                              get_fill_color=[42, 120, 214, 180], radius_min_pixels=2, get_radius=1500, pickable=True)],
+            tooltip={"text": "{tip}"},
+            initial_view_state=pdk.ViewState(latitude=22.5, longitude=80, zoom=3.8)), height=560)
+        return
+
+    d = districts.merge(access[access["service"] == service], on="district_id", how="left")
+    d["km"] = d[km_col]
+    d["colour"] = d["km"].apply(km_colour)
+    d["radius"] = (np.sqrt(d["population_2020"].fillna(0).clip(lower=0)) * 14).clip(lower=6000)
+    d["tip"] = d.apply(lambda r: (f"{r['district_name']}, {r['state_name']}\n"
+                                  f"Average person is {r['km']:.0f} km from the nearest (straight line)\n"
+                                  f"{r[pct_col]:.0f}% of people within 30 km\n"
+                                  f"Population {r['population_2020'] / 1e6:.2f} million") if pd.notna(r["km"])
+                       else f"{r['district_name']}, {r['state_name']}\nno figure", axis=1)
+    fpts = svc_fac[["name", "latitude", "longitude"]].copy()
+    fpts["tip"] = fpts["name"] + "\n(claims the service)"
+    show_fac = st.checkbox("Show facilities that claim the service", value=True, key="g_fac")
+    layers = [pdk.Layer("ScatterplotLayer", d[["centre_lat", "centre_lon", "colour", "radius", "tip"]],
+                        get_position="[centre_lon, centre_lat]", get_fill_color="colour", get_radius="radius",
+                        get_line_color=[255, 255, 255], stroked=True, line_width_min_pixels=1, pickable=True)]
+    if show_fac:
+        layers.append(pdk.Layer("ScatterplotLayer", fpts, get_position="[longitude, latitude]",
+                                get_fill_color=[230, 120, 20, 230], radius_min_pixels=1.5, radius_max_pixels=5,
+                                get_radius=900, pickable=True))
+    st.pydeck_chart(pdk.Deck(layers=layers, tooltip={"text": "{tip}"},
+                             initial_view_state=pdk.ViewState(latitude=22.5, longitude=80.5, zoom=3.9)), height=560)
+    legend("<span style='display:inline-flex;align-items:center'><span style='width:8px;height:8px;border-radius:50%;"
+           "background:rgb(230,120,20);display:inline-block;margin-right:4px'></span>facility claiming the service</span>")
+    st.caption("One circle per district, placed at its centre and sized by population. Darker means the average "
+               "resident is further from the nearest facility claiming the service. Hover for figures.")
+
+    m = st.columns(4)
+    far = d[d["km"] > 30]
+    m[0].metric("Facilities claiming it (usable location)", f"{len(svc_fac):,}")
+    m[1].metric("Districts where the average person is over 30 km away", f"{len(far)} of {len(d)}")
+    m[2].metric("People living in those districts", f"{far['population_2020'].sum() / 1e6:,.0f} million")
+    m[3].metric("Verified by an official source", "0")
+    with st.expander("Districts furthest from this service (table view)"):
+        t = d.sort_values("km", ascending=False)[["district_name", "state_name", "population_2020", "km", pct_col,
+                                                  "facilities_located", "deprivation_tercile"]].head(100)
+        t.columns = ["District", "State", "Population (2020)", "Avg straight-line km", "% people within 30 km",
+                     "Facilities in dataset", "Deprivation (NFHS)"]
+        st.dataframe(t.round(1), hide_index=True, use_container_width=True)
+
+    st.subheader("District zoom")
+    c1, c2 = st.columns(2)
+    states = sorted(d["state_name"].dropna().unique())
+    state = c1.selectbox("State", states, key="g_state", index=states.index("Bihār") if "Bihār" in states else 0)
+    sub = d[d["state_name"] == state].sort_values("district_name")
+    name = c2.selectbox("District", sub["district_name"].tolist(), key="g_district")
+    row = sub[sub["district_name"] == name].iloc[0]
+    k = st.columns(5)
+    k[0].metric("Population (2020)", f"{row['population_2020'] / 1e6:.2f} M" if pd.notna(row["population_2020"]) else "unknown")
+    k[1].metric("Facilities in dataset", f"{int(row['facilities_located'])}" if pd.notna(row["facilities_located"]) else "0")
+    k[2].metric("Avg straight-line km", f"{row['km']:.0f}" if pd.notna(row["km"]) else "unknown")
+    k[3].metric("People within 30 km", f"{row[pct_col]:.0f}%" if pd.notna(row[pct_col]) else "unknown")
+    k[4].metric("Deprivation (NFHS)", clean(row["deprivation_tercile"]) or "unknown")
+
+    blocks = optional(lambda: load_blocks(row["district_id"], service))
+    zones = optional(lambda: load_zones(row["district_id"], service))
+    near = facilities.copy()
+    near["km0"] = haversine_km(row["centre_lat"], row["centre_lon"], near["latitude"].to_numpy(float),
+                               near["longitude"].to_numpy(float))
+    span = max(60.0, float(np.sqrt(row["area_km2"])) * 1.2) if pd.notna(row["area_km2"]) else 80.0
+    claim_ids = set(svc_fac["facility_id"])
+    near = near[near["km0"] <= span].copy()
+    near["claims"] = near["facility_id"].isin(claim_ids)
+    near["colour"] = near["claims"].map({True: [230, 120, 20, 240], False: [130, 130, 130, 150]})
+    near["tip"] = near.apply(lambda r: f"{r['name']}\n{'claims ' + labels[service] if r['claims'] else 'does not claim it'}"
+                                       f"\ncare level {clean(r['care_level']) or 'unknown'}", axis=1)
+    layers = []
+    if blocks is not None:
+        bcol = "km_claimed" if tier == "Any claim" else "km_better_evidenced"
+        blocks = blocks.copy()
+        blocks["colour"] = blocks[bcol].apply(km_colour)
+        blocks["tip"] = blocks.apply(lambda r: f"{r[bcol]:.0f} km to the nearest (straight line)\n"
+                                               f"about {r['population']:,.0f} people in this 5 km block", axis=1)
+        layers.append(pdk.Layer("ScatterplotLayer", blocks[["latitude", "longitude", "colour", "tip"]],
+                                get_position="[longitude, latitude]", get_fill_color="colour", get_radius=2400,
+                                pickable=True))
+    if zones is not None:
+        z = zones[zones["zone_type"] == "critical"].copy()
+        z["tip"] = z.apply(lambda r: f"Critical zone (rank {r['priority_rank']})\n{r['criteria']}", axis=1)
+        layers.append(pdk.Layer("ScatterplotLayer", z[["latitude", "longitude", "tip"]],
+                                get_position="[longitude, latitude]", get_radius=2500, filled=False, stroked=True,
+                                get_line_color=[200, 30, 30, 255], line_width_min_pixels=2, pickable=True))
+    layers.append(pdk.Layer("ScatterplotLayer", near[["latitude", "longitude", "colour", "tip"]],
+                            get_position="[longitude, latitude]", get_fill_color="colour", get_radius=700,
+                            get_line_color=[255, 255, 255], stroked=True, line_width_min_pixels=1,
+                            radius_min_pixels=4, radius_max_pixels=8, pickable=True))
+    zoom = 9.2 if span <= 60 else 8.4 if span <= 110 else 7.4
+    st.pydeck_chart(pdk.Deck(layers=layers, tooltip={"text": "{tip}"},
+                             initial_view_state=pdk.ViewState(latitude=float(row["centre_lat"]),
+                                                              longitude=float(row["centre_lon"]), zoom=zoom)), height=560)
+    if blocks is None:
+        st.caption("No distance blocks for this district and service, so the map shows facility points only.")
+    legend("<span style='margin-right:10px'>🟠 claims the service</span><span style='margin-right:10px'>⚪ other facility</span>"
+           "<span>🔴 ring = critical zone (far, populated, deprived)</span>")
+    st.caption("Each square of colour is a 5 km block. Critical zones exist for 8 of the 14 services. "
+               "A district with no facility in this dataset may still have facilities in reality.")
+
+
+# --------------------------------------------------------------------------
+# Page
+# --------------------------------------------------------------------------
+def main():
+    st.title("Facility Finder (India)")
+    st.caption("Datathon prototype. Every claim below is what a facility says about itself unless marked otherwise.")
+    safety_block()
+    try:
+        claims = load_claims()
+    except Exception as e:
+        st.error(f"Could not read the service table ({type(e).__name__}: {e}).")
+        st.stop()
+    facilities = optional(load_facilities)
+    if facilities is None:
+        facilities = claims.drop_duplicates("facility_id")[["facility_id", "name", "facility_type", "district", "state",
+                                                            "latitude", "longitude", "care_level", "level_kind"]].dropna(
+            subset=["latitude", "longitude"])
+    districts = optional(load_districts)
+    access = optional(load_district_access)
+    if not ensure_feedback_table():
+        st.caption("Feedback table is not writable right now, so reports may not save.")
+
+    t_policy, t_emr, t_patient = st.tabs(["Policy makers", "EMRs (emergency responders)", "Patients"])
+    with t_policy:
+        tab_policy(claims, facilities, districts, access)
+    with t_emr:
+        tab_emrs(claims, districts)
+    with t_patient:
+        tab_patients(claims, districts)
+
+
+main()
