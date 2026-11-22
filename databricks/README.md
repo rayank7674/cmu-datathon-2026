@@ -365,6 +365,7 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-22 | Voronoi catchments per service and evidence tier built (12), 5 of 5 checks passing, and added to the app's Policy tab as the default national map. See section 17 |
 | 2026-11-22 | App map restyle: catchments are shaded by straight-line distance from their facility (dark at the facility, fading outward), one teal ramp across the Policy tab with dark = close everywhere. See section 17 |
 | 2026-11-22 | Team rule: any area over 150 km (straight line) from a facility that could handle a life-threatening emergency is a critical area. `vf_gold.critical_zones_emergency_150km` built in notebook 12 and striped on every service map in the app. See section 17.1 |
+| 2026-11-22 | Two raw government files saved: NMC MBBS colleges (839 rows) and eRaktKosh blood centres (6,524 rows), as `vf_bronze.ext_nmc_colleges_raw` and `vf_bronze.ext_eraktkosh_blood_centres_raw`, with files in the `vf_bronze.external` volume and `external_sources/`. Not matched yet. `External Sources.md` added. See section 14.1 |
 
 ## 12. Implemented: service search tables (chunk C, notebook 09)
 
@@ -553,10 +554,21 @@ Team decision on 2026-11-21: when the chance that two records are the same place
 | `vf_silver.ext_facility_matches` | 3,939 |
 | `vf_silver.ext_facility_match_summary` | 133 |
 | `vf_silver.ext_source_status` | 8 |
+| `vf_bronze.ext_nmc_colleges_raw` | 839 |
+| `vf_bronze.ext_eraktkosh_blood_centres_raw` | 6,524 |
 
 The Wikidata extraction includes hospital identity information and available attributes. Missing attributes remain unknown rather than being estimated from averages.
 
 The cost-reference table contains published aggregate statistics, not facility-specific prices.
+
+**Added 2026-11-22: two raw government files, loaded as downloaded and not yet matched to any facility.** The files are in the volume `vf_bronze.external` (`nmc_colleges/`, `eraktkosh/`) and in the project folder under `external_sources/`. Where each came from and how it was collected is written up in `External Sources.md` in the project folder. Every column is kept as text, plus a `source_file` column.
+
+| Table | What it is | Caveat |
+| --- | --- | --- |
+| `vf_bronze.ext_nmc_colleges_raw` | National Medical Commission list of 839 colleges teaching MBBS: name, state, university, management type, inception year, approved seats | `inception_year` is the college's founding year, not the attached hospital's. Do not use it as a hospital's year of establishment |
+| `vf_bronze.ext_eraktkosh_blood_centres_raw` | eRaktKosh blood centre directory, 6,524 centres with address and coordinates: 4,754 blood banks and 1,770 blood storage units (BSU) | Only `centre_type = 'Blood Bank'` can verify a `blood_bank` claim. A storage unit cannot |
+
+No existing table was changed. `facility_service` still has 0 verified rows until these are matched.
 
 ### 14.2 Facility matching results
 
@@ -583,7 +595,7 @@ Only accepted-high and accepted-medium matches should be considered for downstre
 
 ### 14.3 External sources not yet downloaded
 
-The `ext_source_status` table records seven unavailable sources:
+Six sources are still not downloaded:
 
 | Source | Status |
 | --- | --- |
@@ -591,11 +603,10 @@ The `ext_source_status` table records seven unavailable sources:
 | NABH | Not downloaded |
 | CGHS | Not downloaded |
 | HMIS | Not downloaded |
-| eRaktKosh | Not downloaded |
 | Government Health Centres Directory | Not downloaded |
 | National Hospital Directory | Not downloaded |
 
-All seven reported zero loaded records. The recorded reason was that no eligible downloadable file had been provided.
+All six have zero loaded records, because no eligible downloadable file has been provided. eRaktKosh was downloaded on 2026-11-22 (section 14.1). The `ext_source_status` table was written before that and still lists eRaktKosh as not downloaded; it will be corrected when the matching notebook is next run.
 
 These sources must not be presented as having been successfully integrated. Their absence does not imply that a facility lacks accreditation, empanelment, a blood bank or a particular clinical capability.
 
