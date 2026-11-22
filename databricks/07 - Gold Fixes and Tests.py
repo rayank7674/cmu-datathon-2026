@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # 07 - Gold Fixes and Tests
 # MAGIC Corrections and quality flags that sit **beside** the existing tables. Nothing from notebooks 01-06 is edited, and no row is merged or deleted.

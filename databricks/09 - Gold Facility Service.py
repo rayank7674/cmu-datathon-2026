@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # 09 - Gold Facility Service
 # MAGIC Builds the table the recommender reads, and a separate verification layer.

@@ -1,13 +1,18 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # Task D — independent external data ingestion and conservative matching
 # MAGIC **Run after notebooks 01–06.** Writes only `workspace.vf_bronze.ext_*` and `workspace.vf_silver.ext_*` tables. Never edits source facilities, notebooks 01–06, or Gold.
-# MAGIC 
+# MAGIC
 # MAGIC Prerequisites: `workspace.vf_silver.facilities`, volume `/Volumes/workspace/vf_bronze/external/`, Python+Spark notebook compute. Optional files in `pmjay/`, `nabh/`, `eraktkosh/`, `hmis/`, `gov_hospital_directory/`, `gov_health_centres/`, `cghs/`. Each source directory may contain `manifest.json` with `source_name`, `source_url`, `publication_date`, `downloaded_at`, `file_url` (download URL optional). **Never fabricate missing metadata.** CSV, TSV, XLSX accepted; PDF is NOT silently parsed.
-# MAGIC 
+# MAGIC
 # MAGIC Run cells in order. A source without an authorized downloadable facility-level file is recorded in `ext_source_status` and is NOT ingested. When outbound Wikidata access fails, download SPARQL JSON manually to `wikidata/hospitals.json` and rerun. Keep PM-JAY empanelment, NABH accreditation, and blood-centre listing separate from proof of any clinical service.
 
 # COMMAND ----------
+
 import re, json, os, hashlib, urllib.parse, urllib.request, datetime
 from pyspark.sql import functions as F, Window, types as T
 
@@ -29,6 +34,7 @@ REQUIRE_HMIS_COLUMNS=True
 spark.sql('SELECT COUNT(*) AS n FROM workspace.vf_silver.facilities').show()
 
 # COMMAND ----------
+
 # Fixed schemas; all created tables have ext_ names. Dates below are source dates, not import/verification timestamps.
 status_schema=T.StructType([
  T.StructField('source',T.StringType()),T.StructField('source_name',T.StringType()),
@@ -59,6 +65,7 @@ clean_schema=T.StructType([
  T.StructField('quality_reason',T.StringType())])
 
 # COMMAND ----------
+
 # Verified NSS 80th round (survey Jan-Dec 2025). This is a REFERENCE, not a facility quote or price.
 NSS_URL='https://nhm.tn.gov.in/wp-content/uploads/2026/Key_Statistics/NSSO/NSSO%20Health%2080th.pdf'
 PIB_URL='https://www.pib.gov.in/PressReleasePage.aspx?PRID=2253752&lang=1&reg=22'
@@ -80,6 +87,7 @@ cost_schema=['survey_id','facility_sector','geography','care_category','statisti
 spark.createDataFrame(cost_data, T.StructType([T.StructField(k, (T.DoubleType() if k=='amount' else T.DateType() if k=='publication_date' else T.TimestampType() if k=='downloaded_at' else T.StringType()),True) for k in cost_schema])).write.mode('overwrite').option('overwriteSchema','true').saveAsTable('workspace.vf_bronze.ext_cost_reference')
 
 # COMMAND ----------
+
 # Wikidata SPARQL: P31/P279 hospital; P17 India; P625 coordinates; P571 inception; P6801 hospital beds.
 SPARQL='''SELECT DISTINCT ?item ?itemLabel ?coord ?inception ?beds WHERE {
   ?item wdt:P17 wd:Q668 ; wdt:P31/wdt:P279* wd:Q16917 .
@@ -140,6 +148,7 @@ else:
  print('Wikidata download not available; existing Wikidata bronze snapshot (if any) left untouched; cause:',wd_error)
 
 # COMMAND ----------
+
 # Upload reader. Existing notebook 05 is NEVER edited. Raw JSON preserves original string values.
 def norm_col(s):return re.sub(r'_+','_',re.sub('[^a-z0-9]+','_',s.lower())).strip('_')
 ALIASES={
@@ -266,6 +275,7 @@ for source,(source_name,default_url) in SOURCES.items():
  print(source,status,count,problems[:2])
 
 # COMMAND ----------
+
 # Bronze: per-source raw tables, only if an actual file was loaded.
 if raw_frames:
  allraw=raw_frames[0]
@@ -277,6 +287,7 @@ if raw_frames:
 else: print('No external local CSV/TSV/XLSX provided; existing bronze raw ext_ tables not touched.')
 
 # COMMAND ----------
+
 # Wikidata raw+clean; only replaced on successful retrieval. For beds, leave NULL if conflicting values.
 if wd_rows:
  df=spark.table('workspace.vf_bronze.ext_wikidata_hospitals')
@@ -311,6 +322,7 @@ if activity_frames:
 spark.createDataFrame(statuses,status_schema).write.mode('overwrite').option('overwriteSchema','true').saveAsTable('workspace.vf_silver.ext_source_status')
 
 # COMMAND ----------
+
 # Conservative matcher: geographical/pincode blocking + informative name similarity.
 # No service is verified by these matches. Every accepted match is one-per-facility AND source;
 # an external record competing for two facilities is made ambiguous, not auto-attached.
@@ -404,6 +416,7 @@ if spark.catalog.tableExists('workspace.vf_silver.ext_facilities_clean'):
 else: print('No ext_facilities_clean exists, skipped matcher.')
 
 # COMMAND ----------
+
 # Validation: print measured counts, duplicates, and provenance gaps (no fabricated results).
 for tbl in ['workspace.vf_bronze.ext_cost_reference','workspace.vf_bronze.ext_wikidata_hospitals',
  'workspace.vf_silver.ext_source_status','workspace.vf_silver.ext_hmis_activity','workspace.vf_silver.ext_facilities_clean',
