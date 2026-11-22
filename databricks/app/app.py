@@ -653,11 +653,18 @@ def distance_image(service: str, tier: str, palette: str = "Indigo", flat: bool 
 
 @st.cache_data(ttl=3600)
 def load_critical_blocks(service: str) -> pd.DataFrame:
-    df = query(f"""
-        SELECT latitude, longitude FROM {GOLD}.critical_zones
-        WHERE service = :s AND zone_type = 'critical'
-    """, {"s": service})
-    return df.apply(pd.to_numeric, errors="coerce").dropna()
+    """Critical 5 km blocks: the service's own critical zones OR the 150 km life-threatening rule."""
+    parts = []
+    for q, p in ((f"SELECT latitude, longitude FROM {GOLD}.critical_zones WHERE service = :s AND zone_type = 'critical'",
+                  {"s": service}),
+                 (f"SELECT latitude, longitude FROM {GOLD}.critical_zones_emergency_150km", {})):
+        try:
+            parts.append(query(q, p))
+        except Exception:      # table not built yet
+            pass
+    if not parts:
+        return pd.DataFrame(columns=["latitude", "longitude"])
+    return pd.concat(parts, ignore_index=True).apply(pd.to_numeric, errors="coerce").dropna()
 
 
 @st.cache_data(ttl=3600, show_spinner="Drawing critical-area stripes...", max_entries=40)
@@ -876,10 +883,11 @@ def tab_policy(claims, facilities, districts, access):
                    "facility is the nearest option for a wide area. Facilities with a suspect location are left out. This is not travel "
                    "time or a referral area, and it only knows the facilities in this dataset. Switch the evidence tier "
                    "above to see how the picture changes when weak claims are removed."
-                   + (" Striped areas are critical: 5 km blocks with at least 5,000 people, more than 30 km from the "
-                      "nearest facility claiming the service, in a district in the most deprived third on NFHS-5."
-                      if stripes is not None else
-                      (" No critical areas are defined for this service (they exist for 8 of the 14)." if show_crit else "")))
+                   + (" Striped areas are critical for either of two reasons. (1) For this service: a 5 km block with at "
+                      "least 5,000 people, more than 30 km from the nearest facility claiming it, in a district in the most "
+                      "deprived third on NFHS-5 (defined for 8 of the 14 services). (2) For any service: more than 150 km "
+                      "from the nearest hospital that claims emergency or trauma care plus an ICU, whatever the population."
+                      if stripes is not None else ""))
     else:
         layers = []
         if cat is not None:
@@ -983,7 +991,7 @@ def tab_policy(claims, facilities, districts, access):
     else:
         legend(zoom_extra)
     st.caption("Same shading as the national map: darkest at a facility, fading with straight-line distance. Hover for the "
-               "distance and population of each 5 km block. Critical areas exist for 8 of the 14 services. "
+               "distance and population of each 5 km block. Stripes mark critical areas, as defined under the national map. "
                "A district with no facility in this dataset may still have facilities in reality.")
 
 

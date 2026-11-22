@@ -364,6 +364,7 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-22 | Chunk F: app shell deployed as Databricks App `vf-facility-finder` (folder `app/`); `vf_gold.feedback_reports` created. Ranking is a labelled placeholder. See section 16 |
 | 2026-11-22 | Voronoi catchments per service and evidence tier built (12), 5 of 5 checks passing, and added to the app's Policy tab as the default national map. See section 17 |
 | 2026-11-22 | App map restyle: catchments are shaded by straight-line distance from their facility (dark at the facility, fading outward), one teal ramp across the Policy tab with dark = close everywhere. See section 17 |
+| 2026-11-22 | Team rule: any area over 150 km (straight line) from a facility that could handle a life-threatening emergency is a critical area. `vf_gold.critical_zones_emergency_150km` built in notebook 12 and striped on every service map in the app. See section 17.1 |
 
 ## 12. Implemented: service search tables (chunk C, notebook 09)
 
@@ -809,6 +810,20 @@ Run locally against the real tables with a headless browser: all three tabs rend
 **Tests** (`vf_gold.catchment_checks`, 5 of 5 pass): full coverage of India, one catchment per facility point, no suspect locations, valid polygons, better-evidenced never exceeds claimed.
 
 **Limits.** Straight-line, so not travel time and not a referral area. Only the roughly 10,000 facilities in this dataset, so a huge catchment may mean missing data, not missing care. Edges across borders, rivers and hills are not adjusted.
+
+### 17.1 Critical areas for life-threatening emergencies (150 km rule)
+
+Team rule (Ishaan, 2026-11-22): any area more than 150 km in a straight line from the nearest facility that could handle a life-threatening emergency is a critical area, with no population or deprivation condition. It is an extra way to qualify, alongside `vf_gold.critical_zones` (section 15.7), which is unchanged.
+
+**"Could handle a life-threatening emergency" is defined as** a facility with a `good` location that states emergency care or trauma care in direct wording (strong or moderate claim, no negating text), also states an ICU in direct wording, and has care level 3 or higher. 1,636 facilities meet this. It is built from the facilities' own claims: none is verified and availability today is unknown.
+
+**Tables.** `vf_gold.critical_zones_emergency_150km` (one row per 5 km block over 150 km, with the distance and the nearest capable facility) and `vf_gold.life_threatening_capable_facilities`.
+
+**Measured.** 9,753 of 166,533 blocks (about 244,000 km², 53 districts) holding about 5.87 million of 1.378 billion people. By people: Odisha 2.34 million, Chhattisgarh 2.25 million, Mizoram 0.39 million, Andaman and Nicobar 0.37 million, Ladakh 0.16 million, Arunachal Pradesh 0.11 million. By area it is mostly Ladakh and Arunachal Pradesh.
+
+**In the app.** Stripes on every service's map now mean "critical for this service (section 15.7 rule, 8 services) or over 150 km from life-threatening-capable care (all services)".
+
+**Limits.** Straight-line distance understates real travel in mountains and islands, so the true picture is worse there. The dataset holds only about 10,000 facilities, so some flagged areas may have a capable hospital that is simply not listed; this is most likely for the Odisha and Chhattisgarh blocks.
 ---
 
 ## Sources
