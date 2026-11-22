@@ -14,7 +14,7 @@
 # MAGIC **Rules**
 # MAGIC - The profiles have no coordinates, so matching uses name + state + location text only. The best possible status is therefore `accepted_medium`, never high.
 # MAGIC - Accepted needs all three: the distinctive name words are the same on both sides, the state is the same, and a word from the profile's location text appears in the facility's district, city or address.
-# MAGIC - A similar name in the same state and place whose distinctive words differ (for example "Dental Care" against "Dental College") is `ambiguous` and is for hand review only.
+# MAGIC - A similar name (similarity 0.80 or more) in the same state and place whose distinctive words differ (for example "Dental Care" against "Dental College") is `ambiguous` and is for hand review only.
 # MAGIC - Everything else is `rejected`. An unmatched profile says nothing about any facility.
 # MAGIC - Profile values are self-reported and undated. They sit beside Virtue Foundation values and never replace them. `downloaded_at` is when the page was read, not a verification date.
 # MAGIC - A match supports that the facility exists. It does not establish any clinical service.
@@ -48,6 +48,10 @@ STOP = {"hospital", "hospitals", "the", "and", "of", "centre", "center", "health
         "pvt", "ltd", "research", "memorial", "care", "community", "kendra", "rural", "for", "society"}
 
 
+GENERIC_PLACE = {"road", "west", "east", "north", "south", "village", "block", "district", "hills", "tehsil",
+                 "mandal", "near", "nagar", "town", "city", "post", "taluk", "taluka"}
+
+
 def norm(s):
     return " ".join(re.sub(r"[^a-z0-9 ]", " ", re.sub(r"\(.*?\)", " ", str(s).lower())).split())
 
@@ -68,7 +72,7 @@ fac["loc"] = (fac["district"].fillna("") + " " + fac["city"].fillna("") + " " + 
 rows = []
 for _, x in raw.iterrows():
     nn = norm(x["name"])
-    loc_words = [t for t in re.split(r"[^a-z]+", str(x["location_text"] if pd.notna(x["location_text"]) else "").lower()) if len(t) > 3]
+    loc_words = [t for t in re.split(r"[^a-z]+", str(x["location_text"] if pd.notna(x["location_text"]) else "").lower()) if len(t) > 3 and t not in GENERIC_PLACE]
     tk = words(x["name"])
     # words in the profile name that are just its place (e.g. "..., Mastichak") are not part of the name
     tk_core = {t for t in tk if t not in loc_words} or tk
@@ -83,7 +87,7 @@ for _, x in raw.iterrows():
         fields = ["name"] + (["state"] if same_state else []) + (["location_text"] if loc_hit else [])
         if same_words and same_state and loc_hit:
             status, reason, conf = "accepted_medium", "same distinctive name words, same state, place named in the facility address; no coordinates to confirm", "medium"
-        elif same_state and loc_hit:
+        elif same_state and loc_hit and y["name_sim"] >= 0.80:
             status, reason, conf = "ambiguous", "similar name in the same state and place, but the distinctive name words differ", "low"
         elif same_words and same_state:
             status, reason, conf = "ambiguous", "same name and state, but the place could not be confirmed from the address", "low"
