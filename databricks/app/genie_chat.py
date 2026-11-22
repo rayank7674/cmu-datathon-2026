@@ -57,7 +57,11 @@ def _client():
 
 
 def _ask(question: str) -> dict:
-    """Send one turn. Returns {'text', 'sql', 'description', 'table', 'suggested', 'error'}."""
+    """Send one turn. Returns {'text', 'sql', 'description', 'table', 'suggested', 'error'}.
+
+    The SDK's *_and_wait calls send the message and wait. The finished message and the query result are
+    then read as raw JSON, because the databricks-sdk the Apps runtime installs can be older than the API
+    (it has no GenieAttachment.suggested_questions, for example)."""
     w = _client()
     conv_id = st.session_state.get("genie_conversation_id")
     if conv_id:
@@ -65,31 +69,54 @@ def _ask(question: str) -> dict:
     else:
         msg = w.genie.start_conversation_and_wait(SPACE_ID, question)
         st.session_state["genie_conversation_id"] = msg.conversation_id
+    conv_id = msg.conversation_id
+    msg_id = getattr(msg, "message_id", None) or getattr(msg, "id", None)
+    base = f"/api/2.0/genie/spaces/{SPACE_ID}/conversations/{conv_id}/messages/{msg_id}"
+    try:
+        m = w.api_client.do("GET", base)
+    except Exception:
+        m = msg.as_dict()
+    return _parse(m, lambda att_id: _query_result(w, base, att_id))
+
+
+def _query_result(w, base: str, att_id: str):
+    for path in (f"{base}/attachments/{att_id}/query-result", f"{base}/query-result/{att_id}"):
+        try:
+            return w.api_client.do("GET", path).get("statement_response")
+        except Exception as e:
+            err = e
+    raise err
+
+
+def _parse(m: dict, fetch) -> dict:
     out = {"text": [], "sql": None, "description": None, "table": None, "suggested": [], "error": None}
-    if msg.error:
-        out["error"] = str(getattr(msg.error, "error", msg.error))
-    for att in msg.attachments or []:
-        if att.text and att.text.content:
-            out["text"].append(att.text.content)
-        if att.query:
-            out["sql"] = att.query.query
-            out["description"] = att.query.description
+    if m.get("error"):
+        e = m["error"]
+        out["error"] = str(e.get("error", e) if isinstance(e, dict) else e)
+    for att in m.get("attachments") or []:
+        content = (att.get("text") or {}).get("content")
+        if content:
+            out["text"].append(content)
+        q = att.get("query")
+        if q:
+            out["sql"] = q.get("query")
+            out["description"] = q.get("description")
+            att_id = att.get("attachment_id") or att.get("id")
             try:
-                res = w.genie.get_message_attachment_query_result(
-                    SPACE_ID, msg.conversation_id, msg.message_id, att.attachment_id)
-                out["table"] = _to_frame(res.statement_response)
+                out["table"] = _to_frame(fetch(att_id))
             except Exception as e:  # result may have expired or been too large
                 out["error"] = f"Could not fetch the result table ({type(e).__name__})."
-        if att.suggested_questions and att.suggested_questions.questions:
-            out["suggested"] = list(att.suggested_questions.questions)[:3]
+        sugg = (att.get("suggested_questions") or {}).get("questions") or []
+        if sugg:
+            out["suggested"] = list(sugg)[:3]
     return out
 
 
 def _to_frame(resp) -> pd.DataFrame | None:
-    if resp is None or resp.result is None:
+    if not resp or not resp.get("result"):
         return None
-    cols = [c.name for c in resp.manifest.schema.columns]
-    df = pd.DataFrame(resp.result.data_array or [], columns=cols)
+    cols = [c["name"] for c in resp["manifest"]["schema"]["columns"]]
+    df = pd.DataFrame(resp["result"].get("data_array") or [], columns=cols)
     for c in df.columns:
         conv = pd.to_numeric(df[c], errors="coerce")
         if conv.notna().sum() == df[c].notna().sum():
