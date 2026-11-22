@@ -563,9 +563,18 @@ def tab_emrs(claims, districts):
 # --------------------------------------------------------------------------
 # One teal ramp for the whole tab, ordered dark -> pale. Dark always means "close to a
 # listed facility / well served", pale means "far". (Name kept from the first version.)
-BLUE_RAMP = [(11, 79, 74), (20, 116, 107), (42, 157, 143), (92, 184, 171),
-             (143, 208, 197), (194, 229, 222), (233, 245, 242)]
-FAC_FILL, FAC_LINE = [255, 255, 255, 240], [11, 79, 74, 255]
+PALETTES = {
+    "Indigo": [(38, 34, 98), (62, 60, 143), (92, 96, 178), (129, 137, 204),
+               (170, 178, 224), (210, 214, 239), (240, 241, 250)],
+    "Plum": [(74, 20, 70), (115, 38, 96), (156, 68, 118), (193, 110, 140),
+             (222, 158, 165), (240, 205, 195), (250, 240, 228)],
+    "Ocean": [(8, 48, 107), (8, 81, 156), (33, 113, 181), (66, 146, 198),
+              (107, 174, 214), (158, 202, 225), (222, 235, 247)],
+    "Teal": [(11, 79, 74), (20, 116, 107), (42, 157, 143), (92, 184, 171),
+             (143, 208, 197), (194, 229, 222), (233, 245, 242)],
+}
+BLUE_RAMP = PALETTES["Indigo"]          # the active ramp; tab_policy swaps it when the user picks another
+FAC_FILL, FAC_LINE = [255, 255, 255, 240], [*BLUE_RAMP[0], 255]
 GRADIENT_MAX_KM = 200.0
 GRADIENT_POWER = 0.7     # 1 = even fade; lower = faster fade near the facility
 
@@ -580,7 +589,7 @@ def _unit(lat, lon):
 
 
 @st.cache_data(ttl=3600, show_spinner="Drawing distance shading...")
-def distance_image(service: str, tier: str):
+def distance_image(service: str, tier: str, palette: str = "Indigo"):
     """PNG of straight-line distance to the nearest catchment facility, dark near -> pale far.
 
     Drawn on a Web-Mercator grid (about 3 km per pixel) so it lines up with the map, and
@@ -606,7 +615,7 @@ def distance_image(service: str, tier: str):
     km = (2 * 6371.0088 * np.arcsin(np.clip(chord / 2, 0, 1))).reshape(H, W)
 
     t = np.clip(km / GRADIENT_MAX_KM, 0, 1) ** GRADIENT_POWER
-    stops = np.array(BLUE_RAMP, dtype=float)
+    stops = np.array(PALETTES[palette], dtype=float)
     pos = t * (len(stops) - 1)
     lo = np.floor(pos).astype(int).clip(0, len(stops) - 2)
     frac = (pos - lo)[..., None]
@@ -676,6 +685,7 @@ def legend(extra=""):
 
 
 def tab_policy(claims, facilities, districts, access):
+    global BLUE_RAMP, FAC_LINE
     st.markdown("Where are people far from a facility that claims a service, and how much of that picture rests on "
                 "weak evidence? Distances are straight-line and only to the roughly 10,000 facilities in this dataset.")
     with st.expander("Your role (optional, kept only for this session)"):
@@ -685,11 +695,14 @@ def tab_policy(claims, facilities, districts, access):
         c[1].text_input("Organisation (optional)", key="g_org")
     services = claims[["service", "service_label"]].drop_duplicates().sort_values("service_label")
     labels = dict(zip(services["service"], services["service_label"]))
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns([3, 3, 1])
     service = c1.selectbox("Service", list(labels), format_func=labels.get, key="g_service")
     tier = c2.radio("Evidence tier", ["Any claim", "Better-evidenced claims only"], horizontal=True, key="g_tier",
                     help="Better-evidenced = direct wording, no plausibility flag, a usable location, and the facility is "
                          "matched in an outside source. Still self-reported, not verified.")
+    palette = c3.selectbox("Map colours", list(PALETTES), key="g_palette")
+    BLUE_RAMP = PALETTES[palette]
+    FAC_LINE = [*BLUE_RAMP[0], 255]
     km_col = "pop_weighted_km_claimed" if tier == "Any claim" else "pop_weighted_km_better"
     pct_col = "pct_pop_within_30km_claimed" if tier == "Any claim" else "pct_pop_within_30km_better"
     svc_fac = claims[(claims["service"] == service) & (claims["location_quality_flag"] == "good")]
@@ -725,7 +738,7 @@ def tab_policy(claims, facilities, districts, access):
     tier_key = "claimed" if tier == "Any claim" else "better_evidenced"
     cat = optional(lambda: load_catchments(service, tier_key))
     FAC_CHIP = ("<span style='display:inline-flex;align-items:center'><span style='width:8px;height:8px;border-radius:50%;"
-                "background:#fff;border:2px solid rgb(11,79,74);display:inline-block;margin-right:4px'></span>facility claiming the service</span>")
+                "background:#fff;border:2px solid #555;display:inline-block;margin-right:4px'></span>facility claiming the service</span>")
     v1, v2, v3 = st.columns([2, 2, 2])
     views = (["Catchments (Voronoi)"] if cat is not None else []) + ["District circles"]
     view = v1.radio("Map view", views, horizontal=True, key="g_view")
@@ -742,11 +755,11 @@ def tab_policy(claims, facilities, districts, access):
                                       + (f"About {r['population'] / 1e6:.2f} million people inside"
                                          if pd.notna(r["population"]) else "People inside: unknown")), axis=1)
         if shade == "Distance from its facility":
-            img, bounds = distance_image(service, tier_key)
+            img, bounds = distance_image(service, tier_key, palette)
             c["colour"] = [[0, 0, 0, 0]] * len(c)
             layers = [pdk.Layer("BitmapLayer", image=pdk.types.String(img), bounds=bounds, opacity=1.0),
                       pdk.Layer("PolygonLayer", c[["polygon", "colour", "tip"]], get_polygon="polygon",
-                                get_fill_color="colour", get_line_color=[11, 79, 74, 110],
+                                get_fill_color="colour", get_line_color=[*BLUE_RAMP[0], 110],
                                 line_width_min_pixels=0.8, stroked=True, filled=True, pickable=True)]
         else:
             if shade == "Area":
