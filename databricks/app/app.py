@@ -4,8 +4,9 @@ A Databricks App (Streamlit). Service + location -> candidate facilities, each
 with the claim, the quoted evidence, a source link, confidence, verification
 status and what is still unknown.
 
-This is facility discovery, NOT medical triage. Ranking is a labelled
-placeholder that lives in ranking.rank().
+This is facility discovery, NOT medical triage. The service search uses the
+labelled placeholder in ranking.rank(); the "Describe symptoms" search uses the
+modular recommender in recommender/ (see recommender/README.md).
 """
 import base64
 import io
@@ -22,6 +23,7 @@ from databricks import sql
 from databricks.sdk.core import Config
 
 from ranking import MIN_LEVEL, PLACEHOLDER_NOTE, haversine_km, rank
+from symptom_ui import run_symptom_search, show_result, symptom_form
 
 CATALOG = os.getenv("VF_CATALOG", "workspace")
 GOLD = f"{CATALOG}.vf_gold"
@@ -461,6 +463,14 @@ def tab_patients(claims, districts):
         }
         st.caption("These answers stay in this browser session. They are not written to any table. "
                    "The placeholder ranking does not use them yet; the insurance answer only adds a note to each card.")
+    how = st.radio("How do you want to search?", ["Describe symptoms", "I know the service I need"],
+                   horizontal=True, key="p_how")
+    if how == "Describe symptoms":
+        sx = symptom_form("p", location_input, districts)
+        if sx:
+            st.divider()
+            show_result(run_symptom_search(claims, sx), sx, results_map, "p")
+        return
     search, labels = search_form("p", claims, districts)
     if not search:
         return
@@ -511,6 +521,14 @@ def tab_emrs(claims, districts):
                                                   "Patient transport"], key="e_veh"),
             "min_level_only": c[2].checkbox("Hide facilities below the usual care level", key="e_min"),
         }
+    how = st.radio("How do you want to search?", ["Describe symptoms", "I know the service I need"],
+                   horizontal=True, key="e_how")
+    if how == "Describe symptoms":
+        sx = symptom_form("e", location_input, districts)
+        if sx:
+            st.divider()
+            show_result(run_symptom_search(claims, sx), sx, results_map, "e")
+        return
     search, labels = search_form("e", claims, districts, default_radius=80)
     if not search:
         return
