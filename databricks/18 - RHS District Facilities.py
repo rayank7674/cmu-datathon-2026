@@ -10,6 +10,8 @@
 # MAGIC | `vf_gold.district_rhs_link_issues` | one row per RHS district that could not be linked | left unlinked, with the closest name for a person to review |
 # MAGIC | `vf_gold.district_public_facilities` | one row per map district (735) | government counts beside the facilities in our data |
 # MAGIC | `vf_gold.district_context_with_rhs` | view, one row per map district | `district_context` plus the columns above |
+# MAGIC | `vf_bronze.ext_rhs_state_beds_staff_raw` | state x table x measure x column (1,692) | state beds and staff tables, long format, blanks kept |
+# MAGIC | `vf_gold.state_public_health_capacity` | one row per state (36) | government beds by facility type, PHC doctors and CHC specialists: required, in position, shortfall |
 # MAGIC | `vf_gold.rhs_checks` | one row per check | measured validation |
 # MAGIC
 # MAGIC **Linking rule (same as notebook 11: never the name alone).** An RHS district links to a map district only when the state is the same and either the names are the same, or the RHS name is one the existing crosswalk already links (PIN-code or NFHS-5 district lists) in that state. No fuzzy matching. Anything else is left unlinked and listed.
@@ -114,6 +116,49 @@ FROM workspace.vf_gold.district_context c LEFT JOIN workspace.vf_gold.district_p
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ## State level: government beds and staff (RHS 2021-22, rural areas, as on 31 March 2022)
+# MAGIC Long format, one row per state, table, measure and column. A blank value with a `value_note` means surplus or not available. It is never zero and stays blank here.
+
+# COMMAND ----------
+
+CSV2 = "/Volumes/workspace/vf_bronze/external/rhs/rhs_2021_22_state_beds_staff.csv"
+st = pd.read_csv(CSV2, dtype=str)
+st["source_type"] = "external"
+st["source_ref"] = st["source_name"] + ", " + st["rhs_table"]
+st["confidence"] = "high: official government count, dated 2022-03-31"
+st["source_file"] = "dbfs:" + CSV2
+cols = ", ".join(f"{c} string" for c in st.columns)
+spark.createDataFrame(st.astype(object).where(st.notna(), None), schema=cols).selectExpr("*", "current_timestamp() AS imported_at") \
+    .write.mode("overwrite").option("overwriteSchema", "true").saveAsTable("workspace.vf_bronze.ext_rhs_state_beds_staff_raw")
+
+spark.sql("""
+CREATE OR REPLACE TABLE workspace.vf_gold.state_public_health_capacity AS
+WITH r AS (SELECT state, rhs_table, `column` AS col, CAST(value AS INT) AS v, value_note FROM workspace.vf_bronze.ext_rhs_state_beds_staff_raw)
+SELECT state,
+       max(CASE WHEN rhs_table = 'Table 43' AND col = 'phc' THEN v END) AS govt_beds_phc,
+       max(CASE WHEN rhs_table = 'Table 43' AND col = 'chc' THEN v END) AS govt_beds_chc,
+       max(CASE WHEN rhs_table = 'Table 43' AND col = 'sdh' THEN v END) AS govt_beds_sub_divisional_hospital,
+       max(CASE WHEN rhs_table = 'Table 43' AND col = 'dh' THEN v END) AS govt_beds_district_hospital,
+       max(CASE WHEN rhs_table = 'Table 43' AND col = 'medical_college' THEN v END) AS govt_beds_medical_college,
+       max(CASE WHEN rhs_table = 'Table 16' AND col = 'required' THEN v END) AS phc_doctors_required,
+       max(CASE WHEN rhs_table = 'Table 16' AND col = 'in_position' THEN v END) AS phc_doctors_in_position,
+       max(CASE WHEN rhs_table = 'Table 16' AND col = 'shortfall' THEN v END) AS phc_doctors_shortfall,
+       max(CASE WHEN rhs_table = 'Table 16' AND col = 'shortfall' THEN value_note END) AS phc_doctors_shortfall_note,
+       max(CASE WHEN rhs_table = 'Table 23' AND col = 'required' THEN v END) AS chc_specialists_required,
+       max(CASE WHEN rhs_table = 'Table 23' AND col = 'in_position' THEN v END) AS chc_specialists_in_position,
+       max(CASE WHEN rhs_table = 'Table 23' AND col = 'shortfall' THEN v END) AS chc_specialists_shortfall,
+       max(CASE WHEN rhs_table = 'Table 23' AND col = 'shortfall' THEN value_note END) AS chc_specialists_shortfall_note,
+       round(100.0 * max(CASE WHEN rhs_table = 'Table 23' AND col = 'shortfall' THEN v END) / nullif(max(CASE WHEN rhs_table = 'Table 23' AND col = 'required' THEN v END), 0), 1) AS chc_specialists_shortfall_pct,
+       max(CASE WHEN rhs_table = 'Table 35' AND col = 'dh_sanctioned' THEN v END) AS dh_doctors_sanctioned,
+       max(CASE WHEN rhs_table = 'Table 35' AND col = 'dh_in_position' THEN v END) AS dh_doctors_in_position,
+       DATE'2022-03-31' AS as_of, 'Rural Health Statistics 2021-22 (MoHFW), rural areas; Tables 16, 23, 35, 43' AS source,
+       'A blank means surplus or not available (see the note column), never zero.' AS reading_note
+FROM r GROUP BY state
+""")
+
+# COMMAND ----------
+
 spark.sql("""
 CREATE OR REPLACE TABLE workspace.vf_gold.rhs_checks AS
 SELECT 1 AS n, 'RHS rows loaded' AS check_name, CAST(count(*) AS STRING) AS measured, count(*) = 737 AS passed FROM workspace.vf_bronze.ext_rhs_district_facilities_raw
@@ -132,10 +177,14 @@ UNION ALL SELECT 7, 'govt facilities in linked districts = sum over the map tabl
        (SELECT sum(govt_facilities_total) FROM workspace.vf_gold.district_public_facilities) =
               (SELECT sum(CAST(sub_centres AS INT) + CAST(phcs AS INT) + CAST(chcs AS INT) + CAST(sub_divisional_hospitals AS INT) + CAST(district_hospitals AS INT)) FROM workspace.vf_bronze.ext_rhs_district_facilities_raw p JOIN workspace.vf_gold.district_rhs_crosswalk x ON p.state = x.rhs_state AND p.district = x.rhs_district WHERE x.link_status = 'linked')
 UNION ALL SELECT 8, 'map districts with government counts / without', concat(sum(CAST(rhs_districts_linked > 0 AS INT)), ' / ', sum(CAST(rhs_districts_linked = 0 AS INT))), true FROM workspace.vf_gold.district_public_facilities
+UNION ALL SELECT 10, 'state rows loaded / states', concat(count(*), ' / ', count(DISTINCT state)), count(*) = 1692 AND count(DISTINCT state) = 36 FROM workspace.vf_bronze.ext_rhs_state_beds_staff_raw
+UNION ALL SELECT 11, 'blank values turned into zero (must be 0)', CAST(count(*) AS STRING), count(*) = 0 FROM workspace.vf_bronze.ext_rhs_state_beds_staff_raw WHERE value_note IS NOT NULL AND value IS NOT NULL
+UNION ALL SELECT 12, 'all-India CHC specialists: required / in position / shortfall', concat(sum(chc_specialists_required), ' / ', sum(chc_specialists_in_position), ' / ', sum(chc_specialists_shortfall)), true FROM workspace.vf_gold.state_public_health_capacity
 UNION ALL SELECT 9, 'district_context unchanged', CAST(count(*) AS STRING), count(*) = 735 FROM workspace.vf_gold.district_context
 """)
 out = {"checks": [r.asDict() for r in spark.sql("SELECT * FROM workspace.vf_gold.rhs_checks ORDER BY n").collect()],
        "issues": [r.asDict() for r in spark.sql("SELECT state, name, detail, nearest_polygon_name FROM workspace.vf_gold.district_rhs_link_issues ORDER BY 1, 2").collect()],
+       "state_top": [r.asDict() for r in spark.sql("SELECT state, chc_specialists_required, chc_specialists_in_position, chc_specialists_shortfall, chc_specialists_shortfall_pct FROM workspace.vf_gold.state_public_health_capacity WHERE chc_specialists_required >= 200 ORDER BY chc_specialists_shortfall_pct DESC LIMIT 8").collect()],
        "totals": [r.asDict() for r in spark.sql("""SELECT sum(govt_facilities_total) govt_total, sum(govt_hospitals_chc_and_above) govt_hosp, sum(our_facilities_located) ours_in_linked,
             sum(CAST(our_facilities_located = 0 AND govt_hospitals_chc_and_above > 0 AS INT)) districts_ours_zero_govt_has_hospital,
             sum(CASE WHEN our_facilities_located = 0 THEN govt_hospitals_chc_and_above END) govt_hospitals_in_those
