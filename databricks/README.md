@@ -517,6 +517,85 @@ The rest cover: one row per facility in both level tables; the single-specialty 
 
 ---
 
+## 14. Implemented: external data ingestion and matching (Task D)
+
+**Implemented and validated on 2026-11-21.** Task D runs independently of notebooks 01–06 and writes only to `workspace.vf_bronze.ext_*` and `workspace.vf_silver.ext_*`. The original Virtue Foundation facilities remain the primary source of truth.
+
+### 14.1 External data loaded
+
+| Table | Rows |
+| --- | ---: |
+| `vf_bronze.ext_wikidata_hospitals` | 2,772 |
+| `vf_bronze.ext_cost_reference` | 8 |
+| `vf_silver.ext_facilities_clean` | 2,772 |
+| `vf_silver.ext_facility_match_candidates` | 8,935 |
+| `vf_silver.ext_facility_matches` | 3,939 |
+| `vf_silver.ext_facility_match_summary` | 133 |
+| `vf_silver.ext_source_status` | 8 |
+
+The Wikidata extraction includes hospital identity information and available attributes. Missing attributes remain unknown rather than being estimated from averages.
+
+The cost-reference table contains published aggregate statistics, not facility-specific prices.
+
+### 14.2 Facility matching results
+
+| Match status | Count |
+| --- | ---: |
+| Accepted — high confidence | 114 |
+| Accepted — medium confidence | 19 |
+| Ambiguous | 3 |
+| Rejected | 3,803 |
+| **Total** | **3,939** |
+
+The matcher uses normalized name similarity, geographic distance and pincode agreement where available. Conflicting or insufficient evidence leads to rejected or ambiguous outcomes.
+
+Validation confirmed:
+
+- 133 accepted Wikidata matches.
+- Zero duplicate accepted `(facility_id, source)` combinations.
+- 3,939 distinct facility IDs represented in the match table.
+- The original silver facilities table remains accessible with 9,989 rows.
+
+**Important:** A Wikidata or directory match supports facility identity, existence or descriptive attributes. It does not verify that a hospital currently provides dialysis, C-sections, NICU, trauma care or another specific clinical service.
+
+Only accepted-high and accepted-medium matches should be considered for downstream identity enrichment. Ambiguous and rejected records must not establish facility identity or clinical capability.
+
+### 14.3 External sources not yet downloaded
+
+The `ext_source_status` table records seven unavailable sources:
+
+| Source | Status |
+| --- | --- |
+| PM-JAY | Not downloaded |
+| NABH | Not downloaded |
+| CGHS | Not downloaded |
+| HMIS | Not downloaded |
+| eRaktKosh | Not downloaded |
+| Government Health Centres Directory | Not downloaded |
+| National Hospital Directory | Not downloaded |
+
+All seven reported zero loaded records. The recorded reason was that no eligible downloadable file had been provided.
+
+These sources must not be presented as having been successfully integrated. Their absence does not imply that a facility lacks accreditation, empanelment, a blood bank or a particular clinical capability.
+
+### 14.4 Provenance and uncertainty
+
+The pipeline preserves source identifiers, source references, matching methods, confidence classifications and match decisions.
+
+Source publication dates and actual verification dates must remain distinct from ingestion timestamps. An ingestion timestamp is not evidence that a source or clinical capability was verified on that date.
+
+No facility's capacity, staffing, clinical capabilities or prices are imputed from population or national averages.
+
+### 14.5 Remaining work
+
+1. Obtain authoritative PM-JAY and NABH lists, including publication or validity information.
+2. Upload eligible source files and their metadata to the external volume.
+3. Rerun Task D ingestion and matching.
+4. Repeat duplicate, provenance, confidence and ambiguity validations.
+5. Allow downstream Chunk C consumers to use only accepted external identity matches, retaining original Virtue Foundation evidence for service claims.
+
+**Limitations:** The current accepted matches are exclusively from Wikidata. They provide external identity enrichment, not independent clinical service verification. The remaining seven official source lists have not been ingested.
+
 ## Sources
 
 - Datathon challenge brief (shared by the team).
