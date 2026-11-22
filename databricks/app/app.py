@@ -24,6 +24,7 @@ from databricks.sdk.core import Config
 
 from ranking import MIN_LEVEL, PLACEHOLDER_NOTE, haversine_km, rank
 from symptom_ui import run_symptom_search, show_result, symptom_form
+import genie_chat
 
 CATALOG = os.getenv("VF_CATALOG", "workspace")
 GOLD = f"{CATALOG}.vf_gold"
@@ -1206,7 +1207,14 @@ def main():
     if not ensure_feedback_table():
         st.caption("Feedback table is not writable right now, so reports may not save.")
 
-    t_policy, t_emr, t_patient = st.tabs(["Policy makers", "EMRs (emergency responders)", "Patients"])
+    names = ["Policy makers", "EMRs (emergency responders)", "Patients"]
+    if genie_chat.enabled():  # only when a Genie space is attached to the app
+        names.append("Ask the data")
+    tabs = st.tabs(names)
+    t_policy, t_emr, t_patient = tabs[:3]
+    if genie_chat.enabled():
+        with tabs[3]:
+            genie_chat.tab_genie()
     with t_policy:
         tab_policy(claims, facilities, districts, access)
     with t_emr:
