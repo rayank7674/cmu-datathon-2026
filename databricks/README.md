@@ -377,6 +377,7 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-22 | 28 of the 31 unlinked RHS districts confirmed by hand (734 of 737 linked). Critical blocks in districts with government health centres or hospitals but no facility in our data are flagged (`critical_zones_govt_caveat`) and ringed on the Policy map. See sections 23 and 23.1 |
 | 2026-11-22 | Final hand check of 60 claims (20 per strength): strong 20 of 20 supported, moderate 16 of 20 (2 wrong), weak 7 of 20 (1 wrong, 8 label only); about 6% wrong when weighted. `facility_service_handcheck_final`. See section 24 |
 | 2026-11-22 | Hand review of the 289 held matches (notebook 19): 245 accepted as medium, 16 rejected, 28 left for Ishaan; decisions in `ext_match_review_decisions`, Task D tables untouched; facilities with outside evidence 1,253 to 1,455. See section 25 |
+| 2026-11-22 | App redeployed (Ishaan, 12:15 UTC): final recommender (`app/recommender/`, `symptom_ui.py`: claim reliability from the section 24 hand check, published time curves with a "When did it start?" input; see `app/recommender/README.md`) and a Genie "ask the data" tab (`genie_chat.py`) over 7 gold tables. Genie space "Facility Finder data" created in this folder and attached to the app as resource `genie-space` (CAN_RUN); the space is told to give no medical advice. Previous live version backed up in project files `app_live_backup_1218UTC/` |
 
 ## 12. Implemented: service search tables (chunk C, notebook 09)
 
