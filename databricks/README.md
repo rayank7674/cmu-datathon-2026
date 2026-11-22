@@ -369,6 +369,7 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-22 | Task D evidence integrated into chunk C: notebook 09 reads NABH and eRaktKosh matches (at most `externally_supported`, 0 verified), new notebook 13 builds `facility_external_summary`, `facility_external_evidence`, `facility_external_conflicts`, `facility_external_review` and 15 checks (all pass). See section 18 |
 | 2026-11-22 | App: blood bank search now also shows the 29 facilities that eRaktKosh lists as a Blood Bank without a claim of their own, labelled as a directory listing only (`app.py`, `ranking.py`). See section 18.6 |
 | 2026-11-22 | Rural Hospital Network: 42 self-reported profiles loaded (`vf_bronze.ext_rhn_profiles_raw`) and matched in notebook 14 by name, state and place: 5 accepted (medium), 3 ambiguous, 3 bed differences flagged. See section 19 |
+| 2026-11-22 | Team decision: trust the external source on value conflicts. `vf_gold.facility_resolved_values` built in notebook 15 (7 beds, 17 founding years, 2 NABH withdrawn; originals kept); app cards read it. See section 20 |
 
 ## 12. Implemented: service search tables (chunk C, notebook 09)
 
@@ -963,6 +964,26 @@ Differences: one contradiction (Akhand Jyoti, 500 beds against 250; counted as a
 Ambiguous, for review: Vishnu Dental Care against Vishnu Dental College (Bhimavaram); JMJ Hospital Kadaba against JMJ Hospital (the dataset's record is in Bengaluru); Kasturba Hospital (SEWA Rural) against Kakaba Hospital (Gujarat, probably a different hospital).
 
 **Limits.** Values are self-reported and undated; `downloaded_at` is when the page was read, not a verification date. A match supports that the facility exists and never a clinical service. TAPS Hospital is listed on the site under Jharkhand but its address is Boisar, Maharashtra; it matched nothing in either state. For Akhand Jyoti the Virtue Foundation district is Samastipur while the profile says Saran; the match rests on the name and the town Mastichak.
+
+---
+
+## 20. Implemented: resolved values, "trust the external source" (notebook 15)
+
+**Team decision (Ishaan, 2026-11-22):** where an accepted outside record conflicts with the Virtue Foundation record, trust the outside source. Applied additively in `vf_gold.facility_resolved_values` (one row per facility, 9,989). Original values are kept in `vf_beds`, `vf_year_founded` and `vf_nabh_claimed`; silver and every other table are unchanged.
+
+| Field | Facilities changed | From |
+| --- | ---: | --- |
+| `beds_resolved` | 7 | Wikidata 4 (Hamidia 1,820 to 800, Osmania General 2,000 to 1,168, Victoria 1,800 to 1,000, Voluntary Health Services 218 to 465); Rural Hospital Network 3 (Akhand Jyoti 500 to 250, CSI Basel Mission 130 to 150, Shaheed 150 to 157) |
+| `year_founded_resolved` | 17 | Wikidata, the 17 founding-year contradictions from section 18.4 |
+| `nabh_status_resolved = 'withdrawn'` | 2 | NABH directory: Tristar Hospital, Ayursundra Superspeciality Hospital |
+
+Each changed row has `..._resolution_source = 'external'`, the outside source name and reference, and `resolution_by = 'Ishaan manual decision 2026-11-22: trust the external source'`. 25 facilities are affected in total (Osmania General has both a beds and a year change). For every other facility the resolved value equals the Virtue Foundation value.
+
+`vf_gold.resolved_values_checks`: 7 of 7 pass (one row per facility, counts 7 / 17 / 2, no field with two competing outside values, originals equal silver, nothing changed without an outside value, every change has a source reference and the decision note, no missing value filled in).
+
+Not covered: the ambiguous matches stay held for review; a missing Virtue Foundation value is not filled from an outside source (Padhar Hospital's 200 beds stays beside an unknown); no clinical service is affected. A resolved value is a team decision, not a verification, and the outside values are undated.
+
+App: the Patients and EMRs cards read the resolved values. They show a warning for the 2 facilities whose NABH accreditation is withdrawn, and a beds line where the outside figure is used. The ranking and the symptom recommender do not use beds, founding year or NABH status, so their order is unchanged.
 
 ---
 

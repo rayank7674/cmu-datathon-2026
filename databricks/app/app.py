@@ -103,10 +103,13 @@ def _claims_query(where: str) -> pd.DataFrame:
                c.contact_verification_status, c.contact_phone, c.availability_status,
                c.hours_claim, c.hours_quote, c.evidence_facility_id, c.merged_records,
                f.official_website, f.source_urls[0] AS source_url,
-               l.city, l.operator_type, l.capacity_beds, l.pmjay_claimed, l.cghs_claimed
+               l.city, l.operator_type, coalesce(rv.beds_resolved, l.capacity_beds) AS capacity_beds,
+               rv.vf_beds, rv.beds_resolution_source, rv.beds_external_source,
+               rv.nabh_status_resolved, l.pmjay_claimed, l.cghs_claimed
         FROM {GOLD}.facility_service_canonical c
         LEFT JOIN {SILVER}.facilities f ON f.facility_id = c.evidence_facility_id
         LEFT JOIN {GOLD}.facility_level_canonical l ON l.facility_id = c.facility_id
+        LEFT JOIN {GOLD}.facility_resolved_values rv ON rv.facility_id = c.facility_id
         WHERE {where}
     """)
     for col in ("latitude", "longitude", "care_level", "quality_score"):
@@ -297,6 +300,20 @@ def source_link(r):
     return " · ".join(parts) if parts else "no source link in the dataset"
 
 
+def resolved_notes(r):
+    """Lines for values where the team chose the outside source over the facility's own record."""
+    out = []
+    if clean(r.get("nabh_status_resolved")) == "withdrawn":
+        out.append("⚠️ **NABH accreditation withdrawn.** The NABH directory lists this facility's accreditation as "
+                   "withdrawn, although the facility's own text says it is accredited. The directory is used "
+                   "(team decision, 22 Nov 2026).")
+    if clean(r.get("beds_resolution_source")) == "external" and clean(r.get("capacity_beds")) is not None:
+        out.append(f"Beds: {int(float(r['capacity_beds']))} according to {r['beds_external_source']} "
+                   f"(the facility's record said {int(float(r['vf_beds']))}; the outside source is used by team decision, "
+                   "it is not a verification).")
+    return out
+
+
 def unknowns(r):
     out = ["Whether the service is available or working today: **unknown**."]
     if r["verification_status"] != "verified":
@@ -458,6 +475,8 @@ def patient_card(r, profile, key):
         c2.markdown(f"**Has anyone checked?**  \n{VERIFY_PLAIN.get(r['verification_status'], 'Not checked.')}")
         if clean(r["plausibility_flag"]):
             st.markdown(f"⚠️ **Treat with care:** {r['plausibility_flag']}.")
+        for note in resolved_notes(r):
+            st.markdown(note)
 
         phone = clean(r["contact_phone"])
         if phone:
@@ -620,6 +639,8 @@ def tab_emrs(claims, districts):
         c3.markdown(f"**Phone:** {clean(r['contact_phone']) or 'none'} (unchecked)  \n"
                     f"**Availability now:** unknown  \n**Hours:** {r['hours_claim']}  \n"
                     f"**Position:** {r['latitude']:.5f}, {r['longitude']:.5f}")
+        for note in resolved_notes(r):
+            st.markdown(note)
         feedback_buttons(r, "emrs", f"e_{r['facility_id']}")
     unplaced_block(unplaced)
 
