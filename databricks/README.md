@@ -43,6 +43,7 @@ Every cleaning decision below follows from those three requirements:
 | 06 | External Checks | SQL | OSM file + `vf_silver` + `vf_gold.facility_level` | `vf_silver.external_facilities`, `vf_gold.facility_external_*` | ~1 min |
 | 07 | Gold Fixes and Tests | Python (SQL inside) | `vf_silver.facilities`, `vf_gold.facility_level`, `facility_level_evidence`, `facility_external_check`, `facility_service` if present | `vf_gold.facility_level_v2`, `vf_gold.quality_tests`, `vf_silver.facility_geo_quality`, `vf_silver.facility_duplicate_groups`, `vf_silver.facility_duplicate_pairs` | ~2 min |
 | 09 | Gold Facility Service | Python (SQL inside) | `vf_silver.facilities`, `facility_claims`, `vf_gold.facility_level`, `facility_external_*`, and notebook 07 / 10 tables if they exist (run 07 first) | `vf_gold.facility_service`, `facility_verification`, `facility_service_rules`, `facility_service_checks` | ~2.5 min |
+| 11 | Geography | Python | geoBoundaries + WorldPop downloads, `vf_silver.pincode`, `nfhs_district`, `vf_gold.facility_service_canonical`, `facility_level_canonical`, `vf_silver.facility_geo_quality` | `vf_bronze.geo_*`, `vf_silver.district_polygons`, `vf_gold.district_crosswalk(_issues)`, `access_grid`, `access_evidence_gap`, `district_service_access`, `district_context`, `critical_zones`, `geography_checks` | ~3 min |
 
 Every notebook is **safe to rerun** (`CREATE OR REPLACE`). After changing an earlier layer, rerun everything after it in order.
 
@@ -339,7 +340,7 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 - 75% of facilities have no bed count, and 64% have no doctor count. Most clinics therefore have low confidence.
 - OpenStreetMap confirms only about a quarter of facilities. Government lists should raise this, especially for public rungs.
 - NABH and PM-JAY are self-claims until checked against official lists.
-- Not built yet: ranking on top of `facility_service`, and `district_context` (NFHS need next to facility supply).
+- Not built yet: ranking on top of `facility_service`. `district_context` now exists (section 15).
 
 ---
 
@@ -356,6 +357,10 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-21 | Databricks folder renamed to "CMU Datathon 2026" by the team |
 | 2026-11-21 | Chunk C: `facility_service` and `facility_verification` built and tested (09), 14 of 14 checks passing. See section 12 |
 | 2026-11-21 | Chunk A: `facility_level_v2`, `quality_tests`, `facility_geo_quality`, `facility_duplicate_groups` built (07). Notebook 09 rerun to read them. See section 13 |
+| 2026-11-21 | Bug fix in notebook 03: the camelCase split used `'$1 $2'`, which a notebook run treats as parameters and blanks out. A rerun from the notebook screen garbled specialty text ("emergencyMedicine" -> "emergenc edicine") and dropped about 3,700 weak claims. Replaced with a lookaround pattern that has no `$`; 03, 04, 06, 07, 09 rebuilt in order as notebook jobs. `facility_claims` is again identical to the original build |
+| 2026-11-21 | Team decision: duplicates above 80% confidence are one centre with the higher rung. `vf_silver.facility_canonical` and the per-centre views `facility_level_canonical`, `facility_service_canonical` added (07, 09). See section 13.7 |
+| 2026-11-21 | Notebook 09 now reads notebook 10's `ext_facility_matches`, accepted matches only: 133 Wikidata matches support that a facility exists (never a service) |
+| 2026-11-21 | Chunk E: district polygons, 1 km population grid, crosswalk, `district_context`, straight-line access grid, evidence gap, critical zones, routing function (11). See section 15 |
 
 ## 12. Implemented: service search tables (chunk C, notebook 09)
 
@@ -409,7 +414,7 @@ Ladder: claimed in the facility's own text -> `inferred` -> `externally_supporte
 - `matched_at` is the time the row was computed. `source_date` and `verification_date` stay null unless the source itself gives a date. Both are null everywhere today.
 - Self-claimed badges are recorded as `inferred`: NABH 1,301, PM-JAY 646, CGHS 181.
 
-**Rerun after notebook 10:** rerun notebook 09. It checks whether `vf_silver.ext_facility_matches` exists and, if so, reads it (matches whose method contains "ambig" are skipped). The source name decides what a match can establish. This path was dry-run with made-up matches and gave the expected statuses, but has not run on real notebook 10 output, because that table did not exist yet.
+**Notebook 10 output is now read (rerun 2026-11-21).** Notebook 09 reads `vf_silver.ext_facility_matches` and uses only rows whose `match_status` starts with `accepted` (133 Wikidata matches; the 3,803 rejected and 3 ambiguous rows are ignored). The source name decides what a match can establish: Wikidata supports that the facility exists, nothing more. Result: `_facility_existence` now has 2,773 OpenStreetMap rows and 133 Wikidata rows; no service status changed. The eRaktKosh / CGHS / PM-JAY / NABH paths have still only been dry-run with made-up matches, because those sources are not loaded.
 
 ### 12.4 Measured results
 
@@ -434,11 +439,11 @@ Ladder: claimed in the facility's own text -> `inferred` -> `externally_supporte
 
 - **Claim strength:** 22.5% strong, 35.3% moderate, 42.2% weak. The weak share is highest for paediatrics, childbirth, stroke and NICU, where most hits are a specialty tag.
 - **Verification status of the 26,405 claims:** 26,389 inferred (99.94%), 16 externally supported (0.06%), 0 verified. In other words almost every service claim rests only on the facility's own text.
-- **Facility seen in an outside source:** 10,441 of the claims (39.5%) belong to a facility matched in OpenStreetMap. That supports the facility, not the service.
+- **Facility seen in an outside source:** 10,654 of the claims (40.3%) belong to a facility matched in OpenStreetMap or Wikidata. That supports the facility, not the service.
 - **Type contradictions:** 134 facilities have an outside type that conflicts with ours.
 - 32 claims also have negating text on the same record; 21 facility-service pairs have only negating text and are not counted as claims.
 
-### 12.5 Tests (`vf_gold.facility_service_checks`, 14 of 14 pass)
+### 12.5 Tests (`vf_gold.facility_service_checks`, 16 of 16 pass; two were added for the per-centre view)
 
 One row per facility x service; every silver facility present; no claim without a quote and matched rule; no quote without a claim; negated-only text is never a claim; no `verified` from a map or generic directory; `verified` only for the one thing a source establishes; every outside status has a source and record id; no import time used as a verification date; exactly one primary verification row per pair; `facility_service` status equals the primary row; availability always unknown; `24x7` only with a claim; inferred means a claim and unknown means none.
 
@@ -503,11 +508,23 @@ Two records are linked when their names overlap and something else agrees. Phone
 
 121 records in 56 groups, from 73 links kept in `vf_silver.facility_duplicate_pairs`. The low number is expected: silver already merged exact duplicate ids. Only the 15 high and medium groups are likely the same place; treat low as "same organisation".
 
-### 13.5 `vf_gold.quality_tests` (19 tests, 18 pass)
+### 13.5 `vf_gold.quality_tests` (22 tests, 21 pass; three were added for the canonical map)
 
 The one failing test is deliberate: "no standalone diagnostic centre or pharmacy with a rung (original table)" fails with 1 row on `facility_level` and passes on `facility_level_v2`. It stays in the table as the record of the known issue.
 
 The rest cover: one row per facility in both level tables; the single-specialty guard; every v2 change has a reason; rung is 1 to 5 or empty; no blank evidence quote; one evidence row per facility and signal; the outside check did not duplicate facilities; geo and duplicate tables are well formed; flagging removed no facility; `facility_service` has one row per facility and service and always carries a location flag; no verification date without a dated source; no stray verification-date column; no ingest timestamp exposed in gold.
+
+### 13.7 One centre for near-certain duplicates (`facility_canonical`)
+
+Team decision on 2026-11-21: when the chance that two records are the same place is above 80%, treat them as one centre whose rung is the higher of the two.
+
+- The duplicate confidence is a label, not a measured probability. **`high` is treated as above 80%.** A high link needs the same phone or website, overlapping names and positions within 1 km, all at once. `medium` and `low` links are not merged.
+- **22 records become 11 centres.** Three centres get a higher rung than one of their records had: IRIS Hospital (4 -> 5), Manas Hospital (2 -> 3), Nerlikar Hospital (3 -> 5). 9,989 records -> 9,978 centres.
+- `vf_silver.facility_canonical` maps every record to its centre (`canonical_facility_id`). The centre's record is the one with the higher rung, then the higher quality score. No row is deleted anywhere.
+- `vf_gold.facility_level_canonical` (view): one row per centre, with `member_facility_ids`, `member_names`, `member_care_levels` and a `merge_note`.
+- `vf_gold.facility_service_canonical` (view, built in notebook 09): one row per centre and service. It shows the strongest claim among the records, `evidence_facility_id` says which record the quote came from, and `claims_by_record` keeps every record's claim. The 22 merged records carry 115 claims, which become 75 per-centre claims.
+- Least certain merge: Chettinad Hospital and Research Institute with Chettinad Superspeciality Hospital (same phone, 600 m apart; possibly two hospitals on one campus).
+- To undo or change the rule, edit the `confidence = 'high'` filter in notebook 07 section 3b and rerun 07, 09 and 11.
 
 ### 13.6 Limits
 
@@ -596,6 +613,128 @@ No facility's capacity, staffing, clinical capabilities or prices are imputed fr
 
 **Limitations:** The current accepted matches are exclusively from Wikidata. They provide external identity enrichment, not independent clinical service verification. The remaining seven official source lists have not been ingested.
 
+## 15. Implemented: geography and district context (chunk E, notebook 11)
+
+Built and run in Databricks on 2026-11-21 (job run succeeded in about 3 minutes, 12 of 12 checks pass).
+
+**Read this first.** Every distance here is **straight-line**, not travel time. And every distance is to the nearest facility **in this dataset**, which holds about 10,000 facilities, a fraction of India's real hospitals and clinics. 199 of 735 districts (128 million people) have no located facility in the dataset at all. So a long distance means "nothing in this dataset nearby", which is partly a real gap and partly missing data. Use the numbers to compare places and evidence tiers, not as the true distance to care.
+
+### 15.1 Sources
+
+| Source | Vintage | What it gives | Licence |
+| --- | --- | --- | --- |
+| geoBoundaries gbOpen India ADM2 (districts) | 2021 | 735 district polygons, simplified | Open Data Commons Open Database License 1.0 |
+| geoBoundaries gbOpen India ADM1 (states) | 2011 | 36 state polygons (older: no Telangana or Ladakh) | Creative Commons Attribution 2.5 India (CC BY 2.5 IN) |
+| WorldPop India, UN-adjusted counts | 2020 | population per ~1 km cell (30 arc-seconds). A modelled estimate, not a census | CC BY 4.0 |
+
+Files are kept in the volume `vf_bronze.external` under `geo/` and reused on rerun. `vf_bronze.geo_sources` records URL, vintage, licence and download time (a download time, not a verification date).
+
+### 15.2 Tables
+
+| Table | Rows | What it is |
+| --- | ---: | --- |
+| `vf_bronze.geo_district_polygons_raw` | 735 | polygons as downloaded (GeoJSON text) |
+| `vf_silver.district_polygons` | 735 | district, current state (`state`), the file's own state (`state_name`), area, population, centre, WKT geometry |
+| `vf_gold.district_crosswalk` | 1,451 | every PIN-code district and NFHS district with the polygon it links to, the method and the name similarity |
+| `vf_gold.district_crosswalk_issues` | 93 | everything that did not link cleanly |
+| `vf_gold.access_grid` | 4,105,644 | one row per 1 km land cell: population, district, straight-line km per service (`km_*` claimed, `kmb_*` better evidenced) and per hospital class |
+| `vf_gold.access_evidence_gap` | 2,331,462 | 166,533 blocks of 5 km x 14 services: nearest claimed vs nearest better-evidenced facility |
+| `vf_gold.district_service_access` | 12,495 | district x service (and hospital class): population- vs area-weighted km and coverage |
+| `vf_gold.district_context` | 735 | one row per district (below) |
+| `vf_gold.critical_zones` | 199,362 | flagged 5 km blocks per service, with criteria and a priority rank |
+| `vf_gold.geography_checks` | 12 | tests |
+
+Grid population adds up to 1,378 million, which matches India's 2020 UN total. Two helper tables (`district_crosswalk`, `district_service_access`) were not in the brief.
+
+### 15.3 How places are put in districts
+
+Each 1 km cell, facility and PIN-code centre gets the district whose polygon covers it. That is a lookup by position, so it does not depend on spelling. Precision is one cell (about 1 km) at borders.
+
+### 15.4 District crosswalk: no joins on name alone
+
+| Step | Rule |
+| --- | --- |
+| States | Linked by position: the polygon state that holds most of a state's PIN-code centres. No state names are compared |
+| District, first choice | A polygon **in the same state** with the same name (similarity 0.9+, no close runner-up) |
+| PIN-code district, fallback | 60%+ of its PIN-code centres (at least 5) fall in one polygon. PIN-code centres turned out to be rough, so this is the fallback |
+| NFHS district, fallback | Follows the PIN-code district of the same state and name, or a clear close spelling (0.85+) in the same state |
+| Otherwise | Left unlinked and written to `district_crosswalk_issues` |
+
+Result: 729 of 745 PIN-code districts linked (645 by state + name, 84 by position), 3 linked with low evidence, 13 unlinked. 701 of 706 NFHS districts linked. 698 of 735 polygons have NFHS indicators; 37 do not (districts created after NFHS-5, such as new Andhra Pradesh and Telangana districts). Position links catch renames that names miss, for example Bengaluru Urban -> Bangalore, Y.S.R. -> Kadapa(YSR), Konaseema -> East Godavari (its parent district in this boundary file).
+
+### 15.5 `district_context` (one row per polygon)
+
+- **Identity:** district, state, area, WorldPop 2020 population, density.
+- **NFHS-5:** 12 cleaned indicators (institutional births, C-section births, 4+ antenatal visits, skilled birth attendance, full vaccination, stunting, women's literacy, health insurance, sanitation, electricity, clean fuel, anaemia), `nfhs_districts_linked` and `nfhs_status`. Where several NFHS districts map to one polygon the plain average is used.
+- **Deprivation:** `deprivation_score` is the average national percentile rank over six of those indicators (higher = more deprived), with terciles. A simple index for ranking, not an official one.
+- **Supply, by position, good locations only, one count per centre:** facilities by rung, claims per service (`claimed_*`) and better-evidenced claims (`better_evidenced_*`), per 100,000 people.
+- **Missing-data rates:** share of the district's facilities with no bed count, no doctor count, and a low-confidence level. No bed or doctor number is filled from averages.
+- **Location quality:** `facilities_suspect_or_no_location` counts facilities whose address is in the district but whose position is suspect or missing. They are counted here and never placed on the map.
+- **Coverage:** for emergency, C-section, ICU and rung 3+ hospitals: population-weighted km, area-weighted km, share of people within 30 km and share of land within 30 km. The two weightings differ a lot in districts where people cluster in one town.
+
+What the context shows: the most deprived third of districts (520 million people) has 0.21 dataset facilities per 100,000 people, against 1.28 in the least deprived third, and a population-weighted distance to a claimed emergency facility of 29.7 km against 17.6 km. Part of that is real and part is that the dataset covers poorer districts less.
+
+### 15.6 Access grid and the evidence gap
+
+Two tiers per service:
+- **claimed:** any facility whose own text claims the service.
+- **better evidenced:** direct wording (strong or moderate), no negating text, no plausibility flag, **and** the facility is matched in OpenStreetMap or Wikidata. This is not verification of the service. It removes the weakest claims and unconfirmed facilities.
+
+The brief asked for "externally supported or verified" as the second tier. Only 16 service claims have that status, so that tier would be empty for most services; it is kept as `km_service_supported` in the gap table and the better-evidenced tier is used for the comparison.
+
+Facilities with a suspect or invalid location are left out of all distances (944 of 26,361 per-centre claims). Near-certain duplicates count once.
+
+| Service | Facilities claiming | Better evidenced | Pop-weighted km, claimed | Pop-weighted km, better | People over 30 km, claimed | People over 30 km, better | People where better is 30+ km further |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| emergency | 3,759 | 1,210 | 24.8 | 38.3 | 32.4% | 53.3% | 17.1% |
+| trauma | 1,749 | 483 | 34.6 | 56.9 | 47.4% | 66.6% | 27.3% |
+| obstetric_delivery | 4,543 | 509 | 23.2 | 55.4 | 29.7% | 66.3% | 40.7% |
+| c_section | 424 | 175 | 55.1 | 79.4 | 66.3% | 76.3% | 26.8% |
+| nicu | 1,541 | 305 | 34.0 | 63.0 | 47.2% | 70.1% | 34.2% |
+| dialysis | 1,016 | 471 | 40.2 | 57.5 | 52.6% | 65.7% | 20.4% |
+| icu | 2,814 | 984 | 28.5 | 44.3 | 37.7% | 58.3% | 19.9% |
+| ct | 1,393 | 551 | 35.1 | 51.8 | 49.4% | 63.7% | 20.0% |
+| mri | 917 | 371 | 43.8 | 59.9 | 58.3% | 68.4% | 18.4% |
+| cardiac_cath | 794 | 328 | 45.7 | 61.4 | 58.9% | 71.3% | 20.3% |
+| stroke | 320 | 58 | 67.2 | 128.8 | 71.3% | 85.8% | 47.7% |
+| blood_bank | 619 | 269 | 42.1 | 62.0 | 56.6% | 70.2% | 24.1% |
+| burns | 270 | 72 | 64.2 | 109.9 | 70.7% | 83.0% | 41.7% |
+| paediatrics | 5,258 | 610 | 23.8 | 54.9 | 31.2% | 65.2% | 37.7% |
+
+In `access_evidence_gap`, `differs` is true when the nearest claimed and nearest better-evidenced facility are different, and `gap_flag` when the better-evidenced one is more than 30 km further. For emergency care the two differ in 69% of blocks.
+
+### 15.7 Critical zones
+
+A 5 km block is flagged for a service when it has 5,000+ people, the population-weighted straight-line distance to the nearest claimed facility is over 30 km, and its district is in the most deprived third. Two more types are kept apart: far and populated with no NFHS link, and far only on better evidence (within 30 km of a claimed facility, over 30 km from a better-evidenced one). `priority_rank` orders zones by people x distance so a map can take the top N. For emergency care: 12,901 critical blocks with 164 million people. The thresholds are planning choices written in the `criteria` column; 30 km is not a clinical rule. Because of the dataset coverage caveat above, treat zones as "where to look first", not as proven gaps.
+
+### 15.8 Road time
+
+`route_minutes(pairs, provider="osrm" | "google")` in notebook 11 returns driving minutes and km for a short list of trips. OSRM (public demo server, OpenStreetMap roads, no traffic) needs no key and was tested live from Databricks. The Google option takes a key and its results must not be stored in tables. Test on six critical-zone blocks, shown and not stored:
+
+| District | Straight km | Road km (OSRM) | Minutes (OSRM, no traffic) |
+| --- | ---: | ---: | ---: |
+| Budaun | 40.5 | 43.4 | 32.7 |
+| Panch Mahals | 30.6 | 34.5 | 32.8 |
+| Bulandshahr | 33.4 | 51.4 | 44.1 |
+| Kheri | 85.7 | 114.1 | 84.6 |
+| Murshidabad | 34.1 | 38.0 | 30.5 |
+| Bulandshahr | 30.3 | 49.3 | 41.9 |
+
+Road distance was 7% to 63% longer than straight-line in this small test. The national grid stays straight-line.
+
+### 15.9 Tests (`vf_gold.geography_checks`, 12 of 12 pass)
+
+Population total plausible (1.30 to 1.45 billion); every cell has a district and is unique; district populations add up to the grid; distances present and not negative; better-evidenced distance never shorter than claimed; one context row per polygon; facilities counted by position never exceed good-location facilities; no suspect or invalid location used as a nearest facility; gap table one row per block and service; every crosswalk link has a method and a state; critical zones meet their own criteria; NFHS percentages within 0 to 100.
+
+### 15.10 Limits
+
+- Straight-line and dataset-only distances, as above.
+- District boundaries are 2021; NFHS-5 is 2019-21; PIN-code districts are current. 93 names are in the issues table rather than guessed.
+- `state_name` in the polygon tables is the boundary file's spelling (with diacritics, and Telangana under Andhra Pradesh in the state file). Use `state` for joins and display.
+- The Google routing path is written but was not called (no key). The dashboard has no geography page yet.
+
+---
+
 ## Sources
 
 - Datathon challenge brief (shared by the team).
@@ -603,3 +742,5 @@ No facility's capacity, staffing, clinical capabilities or prices are imputed fr
 - [HOT OpenStreetMap export, Health Facilities of India (HDX)](https://data.humdata.org/dataset/hotosm_ind_health_facilities).
 - [AIKosh: National Hospital Directory with Geo Code](https://aikosh.indiaai.gov.in/home/datasets/details/national_hospital_directory_with_geo_code_and_additional_parameters_updated_till_last_month.html), [All India Health Centres Directory](https://aikosh.indiaai.gov.in/home/datasets/details/all_india_health_centres_directory_till_october_2016.html), [CGHS empanelled hospitals](https://aikosh.indiaai.gov.in/home/datasets/details/list_of_hospitals_empaneled_under_cghs_all_over_india.html).
 - [OpenStreetMap wiki: India Health Facilities Import](https://wiki.openstreetmap.org/wiki/India_Health_Facilities_Import).
+- [geoBoundaries](https://www.geoboundaries.org/) gbOpen India ADM1 and ADM2.
+- [WorldPop](https://hub.worldpop.org/) India 2020 population counts, 1 km, UN-adjusted.
