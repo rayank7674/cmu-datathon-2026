@@ -366,6 +366,7 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-22 | App map restyle: catchments are shaded by straight-line distance from their facility (dark at the facility, fading outward), one teal ramp across the Policy tab with dark = close everywhere. See section 17 |
 | 2026-11-22 | Team rule: any area over 150 km (straight line) from a facility that could handle a life-threatening emergency is a critical area. `vf_gold.critical_zones_emergency_150km` built in notebook 12 and striped on every service map in the app. See section 17.1 |
 | 2026-11-22 | Two raw government files saved: NMC MBBS colleges (839 rows) and eRaktKosh blood centres (6,524 rows), as `vf_bronze.ext_nmc_colleges_raw` and `vf_bronze.ext_eraktkosh_blood_centres_raw`, with files in the `vf_bronze.external` volume and `external_sources/`. Not matched yet. `External Sources.md` added. See section 14.1 |
+| 2026-11-22 | Task D evidence integrated into chunk C: notebook 09 reads NABH and eRaktKosh matches (at most `externally_supported`, 0 verified), new notebook 13 builds `facility_external_summary`, `facility_external_evidence`, `facility_external_conflicts`, `facility_external_review` and 15 checks (all pass). See section 18 |
 
 ## 12. Implemented: service search tables (chunk C, notebook 09)
 
@@ -541,6 +542,8 @@ Team decision on 2026-11-21: when the chance that two records are the same place
 
 ## 14. Implemented: external data ingestion and matching (Task D)
 
+> **Update 2026-11-22:** Task D has since loaded NABH (21,582 records) and eRaktKosh (6,524), and the match tables now hold 20,122 rows with 1,186 accepted matches on 1,144 facilities. The counts in 14.1 to 14.5 below describe the earlier Wikidata-only run. Current counts and how chunk C uses them are in section 18.
+
 **Implemented and validated on 2026-11-21.** Task D runs independently of notebooks 01–06 and writes only to `workspace.vf_bronze.ext_*` and `workspace.vf_silver.ext_*`. The original Virtue Foundation facilities remain the primary source of truth.
 
 ### 14.1 External data loaded
@@ -595,18 +598,17 @@ Only accepted-high and accepted-medium matches should be considered for downstre
 
 ### 14.3 External sources not yet downloaded
 
-Six sources are still not downloaded:
+Five sources are still not downloaded (NABH was loaded on 2026-11-22, see section 18):
 
 | Source | Status |
 | --- | --- |
 | PM-JAY | Not downloaded |
-| NABH | Not downloaded |
 | CGHS | Not downloaded |
 | HMIS | Not downloaded |
 | Government Health Centres Directory | Not downloaded |
 | National Hospital Directory | Not downloaded |
 
-All six have zero loaded records, because no eligible downloadable file has been provided. eRaktKosh was downloaded on 2026-11-22 (section 14.1). The `ext_source_status` table was written before that and still lists eRaktKosh as not downloaded; it will be corrected when the matching notebook is next run.
+All five have zero loaded records, because no eligible downloadable file has been provided. eRaktKosh was downloaded on 2026-11-22 (section 14.1). The `ext_source_status` table was written before that and still lists eRaktKosh as not downloaded; it will be corrected when the matching notebook is next run.
 
 These sources must not be presented as having been successfully integrated. Their absence does not imply that a facility lacks accreditation, empanelment, a blood bank or a particular clinical capability.
 
@@ -835,6 +837,97 @@ Team rule (Ishaan, 2026-11-22): any area more than 150 km in a straight line fro
 **In the app.** Stripes on every service's map now mean "critical for this service (section 15.7 rule, 8 services) or over 150 km from life-threatening-capable care (all services)".
 
 **Limits.** Straight-line distance understates real travel in mountains and islands, so the true picture is worse there. The dataset holds only about 10,000 facilities, so some flagged areas may have a capable hospital that is simply not listed; this is most likely for the Odisha and Chhattisgarh blocks.
+---
+
+## 18. Implemented: Task D evidence in chunk C (notebooks 09 and 13)
+
+**Implemented and tested on 2026-11-22.** The teammate's Task D tables (NABH 21,582 records, eRaktKosh 6,524, Wikidata 2,772; 1,186 accepted matches on 1,144 facilities) are now used by chunk C. Everything is additive: notebooks 01 to 06 and every `ext_` table are untouched, no Virtue Foundation claim or quote was changed, and no clinical service was upgraded to verified.
+
+### 18.1 Rules applied
+
+- Entry point is `vf_silver.ext_facility_match_summary` (one row per facility). Match rows are never joined straight onto the facility table; the per-facility table is built by aggregating first.
+- Only `accepted_high` and `accepted_medium` matches count as identity evidence. The 192 `ambiguous` matches go to a review table and are used nowhere else. Rejected rows are ignored.
+- Each evidence row keeps the source, source record id, match status, match method, match score, matched fields, source reference and source URL.
+- The time a file was downloaded is stored as `source_downloaded_at` and is never shown as a verification date. No table has a verification date for these sources, because none of them publishes one.
+- An outside match grants at most `externally_supported`. Only an official list that names the specific capability could grant `verified`, and none is loaded.
+
+### 18.2 What each source is allowed to establish
+
+| Source | Establishes | Does not establish |
+| --- | --- | --- |
+| NABH, status accredited or renewed | That a directory record with this name and pincode holds an NABH accreditation in the stated programme (hospital, small healthcare organisation, eye care, AYUSH, dental and others). Recorded as `_nabh_accreditation`, `externally_supported`, validity unknown | That the accreditation is current (the directory gives no validity dates), or any clinical service |
+| NABH, entry-level certification or empanelment | Only that the facility exists in the directory (`_nabh_listing`) | Accreditation. Certification and empanelment are different programmes |
+| NABH, withdrawn or suspended | That the record is withdrawn or suspended. If the facility's own text claims accreditation, the row is `contradicted` | |
+| eRaktKosh, centre type Blood Bank | That the national directory lists a licensed blood bank at this facility. `blood_bank` gets `externally_supported` with the note "directory listing only" | Stock today, that the bank is working today, or that transfusions are performed |
+| Wikidata | That the facility exists; beds, founding year and coordinates are shown beside the Virtue Foundation values | Any service. Wikidata values never replace Virtue Foundation values |
+
+A medium-confidence NABH identity match alone does not establish current accreditation. All 986 accepted NABH matches are medium confidence (exact normalised name plus pincode), which is why none is above `externally_supported`.
+
+The teammate's `ext_eraktkosh_raw` was ingested from the same file as `ext_eraktkosh_blood_centres_raw` (all 6,524 codes join), so there is one source and no double counting. Evidence flows only through `ext_facility_matches`.
+
+### 18.3 New and changed tables
+
+| Table | Grain | Use |
+| --- | --- | --- |
+| `vf_gold.facility_external_summary` | one row per facility (9,989) | **The table consumers should read.** `nabh_status`, `eraktkosh_blood_bank_listed`, Wikidata beds and founding year beside the Virtue Foundation values, contradiction count and types, sources matched, `ambiguous_sources_for_review`, `evidence_refs` |
+| `vf_gold.facility_external_evidence` | one row per facility and accepted outside record (1,186) | Detail and source links, with plain-language `establishes` and `does_not_establish` columns |
+| `vf_gold.facility_external_conflicts` | one row per difference (398) | `is_contradiction = true` only where both sources cannot be right. Both values are kept |
+| `vf_gold.facility_external_review` | one row per ambiguous match (192) | Hand review only. Never evidence |
+| `vf_gold.external_integration_checks` | 15 checks | Measured validation, below |
+| `vf_gold.facility_verification` (changed, notebook 09) | adds NABH and eRaktKosh rows | Feeds `verification_status` in `facility_service` |
+
+`nabh_status` values: `no_accepted_match` 9,003, `listed_accredited_validity_unknown` 390, `listed_non_accreditation_programme` 589, `listed_withdrawn` 6, `listed_suspended` 1. `no_accepted_match` means nothing was matched; it does not mean the facility lacks accreditation.
+
+### 18.4 Measured validation (`vf_gold.external_integration_checks`, 15 of 15 pass)
+
+| # | Check | Measured |
+| --- | --- | --- |
+| 1 | Facilities before and after | 9,989 and 9,989 |
+| 2 | Distinct facility ids | 9,989 |
+| 3 | Duplicate facility ids | 0 |
+| 4 | Accepted matches by source | NABH 986, eRaktKosh 67, Wikidata 133 |
+| 5 | Facilities with accepted evidence against the Task D summary | 1,144 and 1,144 |
+| 6 | Evidence rows missing source reference, source type or confidence | 0 |
+| 7 | NABH split | accredited, validity unknown 390 (287 hospital programmes, 103 other programmes); certification 515 and empanelment 74 (not accreditation); withdrawn 6; suspended 1; valid 0; expired 0 |
+| 8 | NABH rows marked verified | 0 |
+| 9 | eRaktKosh rows | 67 directory listings, 0 verified |
+| 10 | Contradictions and other differences | 23 and 375 |
+| 11 | Clinical services marked verified, any source | 0 |
+| 12 | Claims and quotes untouched | 26,405 claims, same as rebuilt from the rules |
+| 13 | Ambiguous matches kept for review only | 192 |
+| 14 | Download time shown as a verification date | 0 |
+| 15 | Existing chunk C tests | 16 of 16 |
+
+Valid and expired are both 0 by construction: the NABH directory carries no validity dates.
+
+Contradictions (23): founding year differs from Wikidata by more than 2 years (17), beds differ from Wikidata (4), and the facility claims NABH accreditation while its matched record is withdrawn (2: Tristar Hospital, Ayursundra Superspeciality Hospital).
+
+Other differences (375, flagged, not contradictions): NABH lists a facility whose text never mentions NABH (202); the facility says "NABH accredited" but the matched record is a certification or empanelment (144, not called a contradiction because the match is by name and pincode and the facility may hold another record); eRaktKosh lists a blood bank the facility's text never mentions (29).
+
+Effect on existing results: `facility_service` is still 139,846 rows. Verification statuses are now unknown 113,408, inferred 26,351, externally supported 87, verified 0. Facilities with outside support that they exist rose from 2,820 to 3,315. `quality_tests` is unchanged at 21 of 22.
+
+Examples. High: Regional Hospital, Bilaspur matched to an eRaktKosh Blood Bank by name and distance (score 0.9). Medium: Amdavad Eye Laser Hospitals matched to an NABH eye-care accreditation by name and pincode (score 0.8). Ambiguous: Guru Nanak Hospital & Research Centre, Mumbai, an NABH entry-level record with a competing candidate. Conflicting: Hamidia Hospital, 1,820 beds in the Virtue Foundation data and 800 in Wikidata; both are kept.
+
+### 18.5 Which table each consumer should read
+
+| Consumer | Services | Outside evidence |
+| --- | --- | --- |
+| Dashboard | `vf_gold.facility_service` (or `facility_service_canonical` per centre) | `vf_gold.facility_external_summary`, and `facility_external_conflicts` for a conflicts panel |
+| Recommendation engine | `vf_gold.facility_service`, column `verification_status` | `facility_external_summary`. Treat `externally_supported` as a tie-breaker at most, never as proof a service works |
+| Patient app | `vf_gold.facility_service` | `facility_external_summary` for badges; `facility_external_evidence` for the source link and the `does_not_establish` wording |
+
+No consumer should read `ext_facility_matches` or `facility_external_review` directly.
+
+### 18.6 Limits and source gaps
+
+- No NABH validity dates, so "currently accredited" cannot be shown for any facility.
+- NABH matching is name plus pincode only. A same-named facility in the same pincode would be a wrong match; this has not been hand checked.
+- eRaktKosh is a directory, not live stock. The 29 facilities listed with a blood bank but no claim in their own text have a `blood_bank` row in `facility_verification` but are not in `facility_service`, so the app's blood bank search does not show them.
+- Wikidata beds and founding years are community edited and undated.
+- Still not loaded: PM-JAY, CGHS, HMIS, National Hospital Directory, Government Health Centres Directory. Their absence says nothing about a facility.
+- `ext_source_status` belongs to Task D and was not edited here.
+- The matcher is the teammate's notebook-10 logic as delivered. The old `F.when(condition, 'fpin')` matcher was not restored.
+
 ---
 
 ## Sources
