@@ -265,7 +265,7 @@ d_km  = "CAST(distance_km AS DOUBLE)" if "distance_km" in d_cols else "CAST(NULL
 d_ref = "CAST(source_ref AS STRING)" if "source_ref" in d_cols else "CAST(NULL AS STRING)"
 # What the matched outside record actually says. A match only tells us WHICH record; these fields say what that
 # record establishes. Read from the Task D bronze tables when they exist; otherwise left null (treated as "details unknown").
-NABH_STATUS_RAW = r"trim(regexp_replace(get_json_object(n.raw_json, '$.status_raw'), '[\\s'']+', ' '))"
+NABH_STATUS_RAW = r"trim(regexp_replace(get_json_object(n.raw_json, '$.status_raw'), '[\\s\']+', ' '))"
 nabh_kind = r"""CASE
       WHEN lower(get_json_object(n.raw_json, '$.status')) = 'withdrawn' OR lower(__RAW__) LIKE '%withdraw%' THEN 'withdrawn'
       WHEN lower(__RAW__) LIKE '%suspen%' THEN 'suspended'
@@ -396,7 +396,7 @@ ext_rows AS (
            WHEN s.source_class = 'nabh' AND s.ext_kind = 'accredited_other_programme' THEN
              concat('The matched NABH directory record shows accreditation under a programme that is not the general hospital programme (', s.ext_label, '). No validity dates; match by name and pincode only. Not proof of any specific clinical capability.')
            WHEN s.source_class = 'nabh' AND s.ext_kind IN ('withdrawn', 'suspended') THEN
-             concat('The matched NABH directory record shows accreditation ', s.ext_kind, ' (', s.ext_label, ').', CASE WHEN coalesce(l.nabh_claimed, false) THEN ' The facility''s own text claims NABH accreditation, so the two disagree.' ELSE '' END, ' Match by name and pincode only.')
+             concat('The matched NABH directory record shows accreditation ', s.ext_kind, ' (', s.ext_label, ').', CASE WHEN coalesce(l.nabh_claimed, false) THEN ' The facility\'s own text claims NABH accreditation, so the two disagree.' ELSE '' END, ' Match by name and pincode only.')
            WHEN s.source_class = 'nabh' AND s.ext_kind = 'certification_not_accreditation' THEN
              concat('The matched NABH directory record is a certification, not accreditation (', s.ext_label, '). No validity dates; match by name and pincode only.')
            WHEN s.source_class = 'nabh' AND s.ext_kind = 'empanelment_not_accreditation' THEN
@@ -414,15 +414,15 @@ baseline AS (
          CASE WHEN claim_detected THEN 'inferred' ELSE 'unknown' END AS verification_status,
          CAST(NULL AS STRING) AS source, CAST(NULL AS STRING) AS ext_id, CAST(NULL AS STRING) AS source_url,
          CAST(NULL AS DOUBLE) AS score, CAST(NULL AS STRING) AS method, CAST(NULL AS DOUBLE) AS km,
-         CASE WHEN claim_detected THEN 'Rests only on the facility''s own listed text. No outside source has checked this service.'
-              WHEN claim_status = 'negated_or_qualified' THEN 'The facility''s text mentions this service only in a negating or qualified way.'
+         CASE WHEN claim_detected THEN 'Rests only on the facility\'s own listed text. No outside source has checked this service.'
+              WHEN claim_status = 'negated_or_qualified' THEN 'The facility\'s text mentions this service only in a negating or qualified way.'
               ELSE 'No mention found and no outside source.' END AS notes,
          false AS contradiction_flag
   FROM fs
   UNION ALL
   -- scheme and accreditation badges the facility claims for itself
   SELECT facility_id, svc, 'claimed', 'inferred', NULL, NULL, NULL, NULL, NULL, NULL,
-         'Self-claimed in the facility''s text. Not checked against the official list.', false
+         'Self-claimed in the facility\'s text. Not checked against the official list.', false
   FROM (SELECT facility_id, explode(filter(array(CASE WHEN nabh_claimed THEN '_nabh_accreditation' END,
                                                  CASE WHEN pmjay_claimed THEN '_pmjay_empanelment' END,
                                                  CASE WHEN cghs_claimed THEN '_cghs_empanelment' END), x -> x IS NOT NULL)) AS svc FROM fl)
