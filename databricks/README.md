@@ -1057,17 +1057,17 @@ All 163 new accepted pairs were read by hand; two wrong ones in the first run (a
 | `vf_bronze.ext_rhs_district_facilities_raw` | RHS district: functioning sub centres, PHCs, CHCs, sub-divisional hospitals, district hospitals (rural + urban) | 737 |
 | `vf_bronze.ext_rhs_state_beds_staff_raw` | state, table, measure, column (long format; blanks kept with their note) | 1,692 |
 | `vf_gold.district_rhs_crosswalk` | RHS district to map district, with the link method | 737 |
-| `vf_gold.district_rhs_link_issues` | RHS districts left unlinked, with the closest map name | 31 |
+| `vf_gold.district_rhs_link_issues` | RHS districts left unlinked, with the reason | 3 |
 | `vf_gold.district_public_facilities` | one row per map district: government counts beside the facilities in our data | 735 |
 | `vf_gold.district_context_with_rhs` | view: `district_context` plus the government columns | 735 |
 | `vf_gold.state_public_health_capacity` | one row per state: government beds by facility type, PHC doctors and CHC specialists (required, in position, shortfall) | 36 |
-| `vf_gold.rhs_checks` | measured checks | 12 of 12 pass |
+| `vf_gold.rhs_checks` | measured checks | 13 of 13 pass |
 
 `district_context` itself is not altered (notebook 11 rebuilds it); read the view or `district_public_facilities`.
 
-**Linking rule.** Same as section 15.4: never the name alone. An RHS district links only when the state is the same and the name is the same as the map district, or is a name the existing crosswalk already links in that state. No fuzzy matching. Result: 706 of 737 linked, covering 703 of 735 map districts. The 31 unlinked are mostly spelling variants (Kanyakumari against Kanniyakumari, Malda against Maldah, North 24 Parganas against North Twenty Four Parganas) and a few new districts; they are listed with the closest name for a person to confirm, and their map districts show no count (unknown, not zero).
+**Linking rule.** Same as section 15.4: never the name alone. An RHS district links only when the state is the same and the name is the same as the map district, or is a name the existing crosswalk already links in that state. No fuzzy matching. That automatic pass linked 706 of 737. The other 31 were then checked by hand (team decision, 2026-11-22): 28 are clear spelling variants or renames within the same state and are linked, each with its reason in `link_method` (for example Kanyakumari to Kanniyakumari, Kawardha to Kabeerdham, Hathras to Mahamaya Nagar, Purba Bardhhaman to the map's Barddhaman, and Yanam, a Puducherry enclave the map places in Andhra Pradesh by position). Three are left unlinked on purpose: Noklak (Nagaland) and Malerkotla (Punjab) were created in 2021 and the map has no separate district, and Hanumakonda (Telangana) changed its boundary when it was renamed. Final: 734 of 737 linked, covering 731 of 735 map districts; the other 4 map districts show no count (unknown, not zero).
 
-**What it shows.** In the 703 linked districts the government counted 191,464 public facilities, 7,690 of them community health centres or hospitals. Our data has 9,248 facilities there, mostly private. In 186 districts our data has no facility at all, yet the government runs 1,021 health centres or hospitals in them. State level: of 21,920 specialists required at community health centres, 4,485 are in position (shortfall 17,435, about 80%).
+**What it shows.** In the 731 linked districts the government counted 200,798 public facilities, 8,102 of them community health centres or hospitals. Our data has 9,599 facilities there, mostly private. In 195 districts our data has no facility at all, yet the government runs 1,084 health centres or hospitals in them. State level: of 21,920 specialists required at community health centres, 4,485 are in position (shortfall 17,435, about 80%).
 
 **Reading it.** Government counts and our facilities are different sets, so one is not a share of the other. The comparison measures how much public care our data cannot see, which matters most for the critical-area maps: a district shown as far from care may have a government hospital that is not in the dataset. Counts are for March 2022 and district boundaries have changed since. A blank staff value means surplus or not available, never zero.
 
