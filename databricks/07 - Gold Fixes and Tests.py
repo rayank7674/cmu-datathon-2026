@@ -446,9 +446,9 @@ SELECT test_id, test_name, table_checked, bad_rows, total_rows, bad_rows = 0 AS 
   UNION ALL SELECT 18, 'no stray verification-date columns', 'information_schema.columns',
          (SELECT count(*) FROM workspace.information_schema.columns WHERE table_schema IN ('vf_silver', 'vf_gold')
             AND lower(column_name) RLIKE 'verif.*(date|_at|time)|last_verified|verified_on'
-            AND NOT (table_name = 'facility_service' AND column_name = 'verification_date')),
+            AND NOT (table_name IN ('facility_service', 'facility_service_canonical') AND column_name = 'verification_date')),
          (SELECT count(*) FROM workspace.information_schema.columns WHERE table_schema IN ('vf_silver', 'vf_gold')),
-         'the only verification date column is facility_service.verification_date, which tests 15 and 16 guard'
+         'the only verification date column is verification_date on facility_service (and its per-centre view), which tests 15 and 16 guard'
   UNION ALL SELECT 19, 'no ingest timestamp exposed in gold', 'information_schema.columns',
          (SELECT count(*) FROM workspace.information_schema.columns WHERE table_schema = 'vf_gold' AND lower(column_name) RLIKE 'ingest|import|loaded_at'),
          (SELECT count(*) FROM workspace.information_schema.columns WHERE table_schema = 'vf_gold'), 'load times stay in bronze'
