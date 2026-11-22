@@ -362,6 +362,7 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-21 | Notebook 09 now reads notebook 10's `ext_facility_matches`, accepted matches only: 133 Wikidata matches support that a facility exists (never a service) |
 | 2026-11-21 | Chunk E: district polygons, 1 km population grid, crosswalk, `district_context`, straight-line access grid, evidence gap, critical zones, routing function (11). See section 15 |
 | 2026-11-22 | Chunk F: app shell deployed as Databricks App `vf-facility-finder` (folder `app/`); `vf_gold.feedback_reports` created. Ranking is a labelled placeholder. See section 16 |
+| 2026-11-22 | Voronoi catchments per service and evidence tier built (12), 5 of 5 checks passing, and added to the app's Policy tab as the default national map. See section 17 |
 
 ## 12. Implemented: service search tables (chunk C, notebook 09)
 
@@ -783,6 +784,30 @@ Run locally against the real tables with a headless browser: all three tabs rend
 - No travel time, cost, bed availability or quality measure yet.
 - The district map uses centre points, not boundaries.
 - To redeploy after an edit: upload the files to `app/` and deploy the app again from its page under Compute, Apps.
+
+---
+
+## 17. Implemented: Voronoi catchments (notebook 12)
+
+**Why it was added late.** The first app build (section 16) drew district circles instead, because chunk F's brief only asked for facility points plus the district tables. The plan's headline visual was the Voronoi map, so it was added straight after.
+
+**What it is.** For each service, India is divided into catchments: the area closer, in a straight line, to one facility claiming the service than to any other. `vf_gold.service_catchments` holds one row per polygon piece, for two tiers (`claimed` and `better_evidenced`, the same definitions as section 15.6).
+
+| Choice | Reason |
+| --- | --- |
+| Good-location facilities only | A suspect pin would draw a catchment in the wrong place. 944 of 26,361 claims are left out for this reason |
+| Projected to India NSF LCC (EPSG:7755) before computing | Voronoi on raw latitude and longitude distorts distances; this projection is made for all-India maps |
+| Clipped to the union of the district polygons | Keeps catchments inside India |
+| Population from `access_evidence_gap` | Each 5 km block already records its nearest facility, so people per catchment is a sum, and it agrees with the access tables |
+| Polygon stored as a JSON ring of [lon, lat] | The app can draw it with no geometry library |
+
+**Measured.** 31,813 catchments across 14 services and two tiers (34,965 polygon pieces, since coasts and islands split some). For every service and tier the areas sum to 100.00% of the outline and the people inside sum to 1.378 billion. Median catchment for emergency care is 16 km² on any claim and 305 km² on better-evidenced claims; for stroke care it is 3,211 km² and 33,666 km².
+
+**In the app.** The Policy tab's national map defaults to "Catchments (Voronoi)", shaded by area or by people inside, with the evidence-tier switch redrawing it. The district zoom shows catchment edges as dark lines. District circles remain as a second view.
+
+**Tests** (`vf_gold.catchment_checks`, 5 of 5 pass): full coverage of India, one catchment per facility point, no suspect locations, valid polygons, better-evidenced never exceeds claimed.
+
+**Limits.** Straight-line, so not travel time and not a referral area. Only the roughly 10,000 facilities in this dataset, so a huge catchment may mean missing data, not missing care. Edges across borders, rivers and hills are not adjusted.
 ---
 
 ## Sources
