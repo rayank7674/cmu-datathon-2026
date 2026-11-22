@@ -19,6 +19,8 @@
 # MAGIC
 # MAGIC **Every distance in this notebook is straight-line (as the crow flies). It is not travel time.** It ignores roads, rivers, hills and traffic, so real journeys are longer. Section 8 has a routing function for small sets of real road times.
 # MAGIC
+# MAGIC **Distances are to facilities in this dataset only.** The Virtue Foundation data holds about 10,000 facilities, a fraction of India's real hospitals and clinics. A long distance here means "no facility *in this dataset* nearby", which is partly a real gap and partly missing data. Read the numbers as relative, between places and between evidence tiers, not as the true distance to care.
+# MAGIC
 # MAGIC Run after 07 and 09. Safe to rerun; downloads are kept in the volume and reused. Takes about 10 minutes.
 
 # COMMAND ----------
@@ -185,8 +187,10 @@ SUMMARY.update(districts_without_cells=int((poly.grid_cells == 0).sum()), distri
 # MAGIC ## 3. District crosswalk
 # MAGIC Three district lists have to line up: the **polygons**, the **PIN-code districts** that `vf_silver.facilities` uses, and the **NFHS-5 districts**.
 # MAGIC
-# MAGIC - PIN-code district -> polygon: by **position**. Each PIN code centre is dropped on the map; a PIN-code district is linked to the polygon that holds most of its PIN codes. The name is only used to confirm.
-# MAGIC - NFHS district -> PIN-code district: same state **and** same normalised district name. If that fails, a close spelling in the **same state** (one clear candidate only). Never on the name alone.
+# MAGIC - **States** are linked by position: a state's PIN-code centres are dropped on the map and the polygon state holding most of them is its match. No state names are compared.
+# MAGIC - A district (PIN-code or NFHS) is linked to a polygon when a polygon **in the same state** has the same name (similarity 0.9+, with no close runner-up). State plus name, never the name alone.
+# MAGIC - If that fails, a PIN-code district is linked by position when 60%+ of its PIN-code centres (at least 5) fall in one polygon. PIN-code centres are rough, so position alone is the fallback, not the first choice.
+# MAGIC - If that fails, an NFHS district may follow its PIN-code district of the same state and name, or a clear close spelling (0.85+) in the same state.
 # MAGIC - Anything else goes to `district_crosswalk_issues` and is left unlinked.
 # MAGIC
 # MAGIC Several newer districts can sit inside one older polygon (districts get split over time). That is recorded, not treated as an error.
@@ -194,97 +198,102 @@ SUMMARY.update(districts_without_cells=int((poly.grid_cells == 0).sum()), distri
 # COMMAND ----------
 
 def nk(x):
-    return re.sub(r"[^a-z]", "", str(x or "").lower())
+    x = str(x or "").lower()
+    for a, b in (("ā", "a"), ("ī", "i"), ("ū", "u"), ("ē", "e"), ("ō", "o")): x = x.replace(a, b)
+    return re.sub(r"[^a-z]", "", x)
 def sim(a, b):
     return difflib.SequenceMatcher(None, nk(a), nk(b)).ratio()
 
 pins = spark.sql("SELECT pincode, state, district, district_key, centroid_lat, centroid_lon FROM workspace.vf_silver.pincode WHERE centroid_lat IS NOT NULL").toPandas()
 pins["didx"] = district_at(pins.centroid_lat.values, pins.centroid_lon.values)
+pins = pins.merge(poly[["district_idx", "state_name"]], left_on="didx", right_on="district_idx", how="left")
+# state link, by position: the polygon state that holds most of a state's PIN-code centres
+state_poly = pins[pins.didx > 0].groupby("state").state_name.agg(lambda x: x.value_counts().index[0]).to_dict()
+state_back = {v: k for k, v in state_poly.items()}
+polys_in = poly.groupby("state_name").apply(lambda g: list(zip(g.district_idx, g.district_name))).to_dict()
+pname = dict(zip(poly.district_idx, poly.district_name)); pid = dict(zip(poly.district_idx, poly.district_id)); pstate = dict(zip(poly.district_idx, poly.state_name))
+votes = pins[pins.didx > 0].groupby(["state", "district_key", "didx"]).size()
+tot = votes.groupby(level=[0, 1]).sum()
+
+def by_name(state, name):
+    """Best polygon in the same state by name. Returns (district_idx, similarity, clear) where clear = no close runner-up."""
+    c = sorted(((sim(name, n), idx) for idx, n in polys_in.get(state_poly.get(state), [])), reverse=True)
+    if not c: return None, None, False
+    return c[0][1], round(c[0][0], 2), (len(c) == 1 or c[0][0] - c[1][0] >= 0.05)
+
+rows_x = []
 pin_all = spark.sql("SELECT state, district_key, max(district) AS district, count(*) AS pins FROM workspace.vf_silver.pincode GROUP BY 1, 2").toPandas()
-
-votes = pins[pins.didx > 0].groupby(["state", "district_key", "didx"]).size().reset_index(name="n")
-tot = votes.groupby(["state", "district_key"]).n.sum().rename("tot")
-best = votes.sort_values("n", ascending=False).drop_duplicates(["state", "district_key"]).merge(tot, on=["state", "district_key"])
-best["share"] = best.n / best.tot
-xw = pin_all.merge(best, on=["state", "district_key"], how="left").merge(poly[["district_idx", "district_id", "district_name", "state_name"]], left_on="didx", right_on="district_idx", how="left")
-xw["name_similarity"] = [sim(a, b) if isinstance(b, str) else None for a, b in zip(xw.district, xw.district_name)]
-def link_status(r):
-    if pd.isna(r.didx): return "unlinked"
-    if r.share >= 0.6 and (r.name_similarity >= 0.6 or r.tot >= 5): return "linked"
-    if r.share >= 0.6: return "linked_low_evidence"
-    return "split_across_polygons"
-xw["pin_link_status"] = xw.apply(link_status, axis=1)
-xw["pin_link_method"] = np.where(xw.didx.notna(), "position: most PIN-code centres fall in this polygon", None)
-
-# NFHS -> PIN-code district
-nf = spark.sql("SELECT state, district_key, district_name FROM workspace.vf_silver.nfhs_district").toPandas()
-keyset = {(s, k) for s, k in zip(xw.state, xw.district_key)}
-by_state = xw.groupby("state").district_key.apply(list).to_dict()
-nf_link = []
-for r in nf.itertuples():
-    if (r.state, r.district_key) in keyset:
-        nf_link.append((r.state, r.district_key, r.district_name, r.district_key, "same state + same district name", 1.0)); continue
-    cands = sorted(((sim(r.district_key, k), k) for k in by_state.get(r.state, [])), reverse=True)
-    if cands and cands[0][0] >= 0.85 and (len(cands) == 1 or cands[0][0] - cands[1][0] >= 0.05):
-        nf_link.append((r.state, r.district_key, r.district_name, cands[0][1], "same state + close spelling", round(cands[0][0], 2)))
+pin_link = {}
+for r in pin_all.itertuples():
+    n_loc = int(tot.get((r.state, r.district_key), 0))
+    v = votes.get((r.state, r.district_key)) if n_loc else None
+    pos_idx = int(v.idxmax()) if v is not None else None
+    pos_share = float(v.max() / n_loc) if v is not None else None
+    nm_idx, nm_sim, clear = by_name(r.state, r.district)
+    if nm_idx is not None and nm_sim >= 0.9 and clear:
+        idx, status, method, s_ = nm_idx, "linked", "same state (by position) + same district name", nm_sim
+    elif pos_idx is not None and pos_share >= 0.6 and n_loc >= 5:
+        idx, status, method, s_ = pos_idx, "linked", "position: most PIN-code centres fall in this polygon", round(sim(r.district, pname[pos_idx]), 2)
+    elif pos_idx is not None and pos_share >= 0.6:
+        idx, status, method, s_ = pos_idx, "linked_low_evidence", "position, under 5 PIN codes and a different name", round(sim(r.district, pname[pos_idx]), 2)
     else:
-        nf_link.append((r.state, r.district_key, r.district_name, None, None, round(cands[0][0], 2) if cands else None))
-nfl = pd.DataFrame(nf_link, columns=["state", "nfhs_district_key", "nfhs_district_name", "district_key", "nfhs_link_method", "nfhs_name_similarity"])
+        idx, status, method, s_ = None, "unlinked", None, nm_sim
+    share = float(v.get(idx, 0) / n_loc) if (idx is not None and v is not None) else None
+    if status == "linked": pin_link[(r.state, r.district_key)] = idx
+    rows_x.append(dict(source_list="pin_district", state=r.state, district_key=r.district_key, district_name=r.district,
+        polygon_district_id=pid.get(idx), polygon_district_name=pname.get(idx), polygon_state_name=pstate.get(idx),
+        link_status=status, link_method=method, name_similarity=s_, pin_codes=int(r.pins), pin_codes_located=n_loc,
+        share_of_pin_codes_in_polygon=None if share is None else round(share, 3),
+        note=None if status != "unlinked" else ("no polygon with this name in the state, and its PIN-code centres are spread over several polygons"
+              + (f" (closest name: {pname.get(nm_idx)}, largest share: {pname.get(pos_idx)} {round(pos_share, 2)})" if pos_idx is not None else ""))))
 
-# second chance for NFHS districts with no PIN-code district: the polygon name inside the same state (state matched by position)
-state_poly = (xw[xw.pin_link_status.isin(["linked", "linked_low_evidence"])].groupby("state").state_name.agg(lambda s: s.value_counts().index[0])).to_dict()
-poly_by_state = poly.groupby("state_name").apply(lambda g: list(zip(g.district_idx, g.district_name))).to_dict()
-direct = {}
-for i, r in nfl[nfl.district_key.isna()].iterrows():
-    cands = sorted(((sim(r.nfhs_district_name, n), idx) for idx, n in poly_by_state.get(state_poly.get(r.state), [])), reverse=True)
-    if cands and cands[0][0] >= 0.85 and (len(cands) == 1 or cands[0][0] - cands[1][0] >= 0.05):
-        direct[i] = (cands[0][1], round(cands[0][0], 2))
-nfl["direct_didx"] = pd.Series({i: v[0] for i, v in direct.items()})
-nfl.loc[list(direct), "nfhs_link_method"] = "same state (by position) + polygon name close spelling"
-nfl.loc[list(direct), "nfhs_name_similarity"] = [v[1] for v in direct.values()]
-
-cross = xw.merge(nfl[nfl.district_key.notna()], on=["state", "district_key"], how="outer")
-extra = nfl[nfl.district_key.isna()].copy()
-extra = extra.merge(poly[["district_idx", "district_id", "district_name", "state_name"]], left_on="direct_didx", right_on="district_idx", how="left")
-cross = pd.concat([cross, extra], ignore_index=True)
-crosswalk = pd.DataFrame({
-    "state": cross.state, "pin_district_key": cross.district_key, "pin_district_name": cross.get("district"),
-    "polygon_district_id": cross.district_id, "polygon_district_name": cross.district_name, "polygon_state_name": cross.state_name,
-    "pin_codes": cross.get("pins"), "pin_codes_located": cross.get("tot"), "share_of_pin_codes_in_polygon": cross.get("share").round(3) if "share" in cross else None,
-    "polygon_name_similarity": cross.get("name_similarity"), "pin_link_status": cross.get("pin_link_status"), "pin_link_method": cross.get("pin_link_method"),
-    "nfhs_district_key": cross.nfhs_district_key, "nfhs_district_name": cross.nfhs_district_name, "nfhs_link_method": cross.nfhs_link_method,
-    "nfhs_name_similarity": cross.nfhs_name_similarity,
-})
-crosswalk["polygon_name_similarity"] = pd.to_numeric(crosswalk.polygon_name_similarity).round(2)
+nf = spark.sql("SELECT state, district_key, district_name FROM workspace.vf_silver.nfhs_district").toPandas()
+pin_keys_by_state = pin_all.groupby("state").district_key.apply(list).to_dict()
+for r in nf.itertuples():
+    nm_idx, nm_sim, clear = by_name(r.state, r.district_name)
+    idx, method, s_ = None, None, nm_sim
+    if nm_idx is not None and nm_sim >= 0.9 and clear:
+        idx, method = nm_idx, "same state (by position) + same district name"
+    elif (r.state, r.district_key) in pin_link:
+        idx, method, s_ = pin_link[(r.state, r.district_key)], "through the PIN-code district of the same state and name", round(sim(r.district_name, pname[pin_link[(r.state, r.district_key)]]), 2)
+    elif nm_idx is not None and nm_sim >= 0.85 and clear:
+        idx, method = nm_idx, "same state (by position) + close spelling"
+    else:
+        c = sorted(((sim(r.district_key, k), k) for k in pin_keys_by_state.get(r.state, []) if (r.state, k) in pin_link), reverse=True)
+        if c and c[0][0] >= 0.85 and (len(c) == 1 or c[0][0] - c[1][0] >= 0.05):
+            idx, method, s_ = pin_link[(r.state, c[0][1])], "through a PIN-code district with a close spelling in the same state", round(c[0][0], 2)
+    rows_x.append(dict(source_list="nfhs_district", state=r.state, district_key=r.district_key, district_name=r.district_name,
+        polygon_district_id=pid.get(idx), polygon_district_name=pname.get(idx), polygon_state_name=pstate.get(idx),
+        link_status="linked" if idx is not None else "unlinked", link_method=method, name_similarity=s_, pin_codes=None, pin_codes_located=None,
+        share_of_pin_codes_in_polygon=None,
+        note=None if idx is not None else f"no district with this name in the same state (closest polygon name: {pname.get(nm_idx)}, similarity {nm_sim})"))
+crosswalk = pd.DataFrame(rows_x)
 for c in ("pin_codes", "pin_codes_located"): crosswalk[c] = pd.to_numeric(crosswalk[c]).astype("Int64")
-crosswalk["nfhs_usable"] = crosswalk.nfhs_district_key.notna() & crosswalk.polygon_district_id.notna() & (crosswalk.pin_link_status.isin(["linked", "linked_low_evidence"]) | crosswalk.pin_district_key.isna())
-write_table(crosswalk, "workspace.vf_gold.district_crosswalk", "Links polygon districts, PIN-code districts (used by vf_silver.facilities) and NFHS-5 districts. PIN-code districts are linked by position; NFHS by state + name (notebook 11).")
+write_table(crosswalk, "workspace.vf_gold.district_crosswalk", "Links PIN-code districts (used by vf_silver.facilities) and NFHS-5 districts to polygon districts. A link always needs the state (matched by position) plus the name, or a clear majority of PIN-code centres. Never the name alone (notebook 11).")
 
-issues = []
-for r in crosswalk.itertuples():
-    if r.pin_district_key is not None and not pd.isna(r.pin_district_key) and r.pin_link_status != "linked":
-        issues.append(("pin_district", r.state, r.pin_district_key, r.pin_link_status,
-                       {"unlinked": "no PIN-code centre of this district falls inside any polygon",
-                        "split_across_polygons": f"its PIN codes are spread over several polygons; the largest holds {r.share_of_pin_codes_in_polygon}",
-                        "linked_low_evidence": "linked by position but with under 5 PIN codes and a different name"}.get(r.pin_link_status, ""),
-                       r.polygon_district_name))
-    if r.nfhs_district_key is not None and not pd.isna(r.nfhs_district_key) and not r.nfhs_usable:
-        issues.append(("nfhs_district", r.state, r.nfhs_district_key, "nfhs_not_linked",
-                       "no district with this name in the same state, in the PIN-code list or the polygons" if pd.isna(r.polygon_district_id) else "its PIN-code district is not cleanly linked to a polygon",
-                       r.polygon_district_name))
-linked_polys = set(crosswalk[crosswalk.polygon_district_id.notna()].polygon_district_id)
-for r in poly.itertuples():
-    if r.district_id not in linked_polys:
-        issues.append(("polygon_district", r.state_name, r.district_name, "polygon_without_pin_district", "no PIN-code district is linked to this polygon (boundary vintage or a very small unit)", r.district_name))
-per_poly = crosswalk[crosswalk.pin_link_status.isin(["linked", "linked_low_evidence"])].groupby("polygon_district_id").pin_district_key.nunique()
-for pid, n in per_poly[per_poly > 1].items():
-    nm = poly.loc[poly.district_id == pid, "district_name"].iloc[0]
-    issues.append(("polygon_district", poly.loc[poly.district_id == pid, "state_name"].iloc[0], nm, "several_pin_districts_in_one_polygon", f"{n} PIN-code districts sit inside this polygon (districts split since the boundary year)", nm))
+# the silver (current) state of each polygon: the state of most PIN-code centres inside it; polygons with none fall back to the state link
+st_in = pins[pins.didx > 0].groupby("didx").state.agg(lambda x: x.value_counts().index[0])
+poly["state"] = poly.district_idx.map(st_in).fillna(poly.state_name.map(state_back))   # state_name is the polygon file's own (older) state
+issues = [(r.source_list, r.state, r.district_name, r.link_status, r.note or r.link_method, r.polygon_district_name)
+          for r in crosswalk.itertuples() if r.link_status != "linked"]
+lp = crosswalk[crosswalk.link_status == "linked"]
+for src_list, label in (("pin_district", "PIN-code"), ("nfhs_district", "NFHS")):
+    have = set(lp[lp.source_list == src_list].polygon_district_id)
+    for r in poly.itertuples():
+        if r.district_id not in have:
+            issues.append(("polygon_district", r.state, r.district_name, f"polygon_without_{src_list}", f"no {label} district is linked to this polygon (boundary vintage differs, or a new or very small district)", r.district_name))
+    per = lp[lp.source_list == src_list].groupby("polygon_district_id").district_key.nunique()
+    for q, n in per[per > 1].items():
+        rr = poly[poly.district_id == q].iloc[0]
+        issues.append(("polygon_district", rr.state, rr.district_name, f"several_{src_list}s_in_one_polygon", f"{n} {label} districts are linked to this polygon", rr.district_name))
 iss = pd.DataFrame(issues, columns=["list", "state", "name", "issue", "detail", "nearest_polygon_name"])
 write_table(iss, "workspace.vf_gold.district_crosswalk_issues", "District names that could not be linked cleanly between polygons, PIN-code districts and NFHS-5 (notebook 11). Unlinked names are left unlinked, not guessed.")
-SUMMARY.update(pin_districts=int(crosswalk.pin_district_key.notna().sum()), pin_districts_linked=int((crosswalk.pin_link_status == "linked").sum()),
-               nfhs_districts=int(len(nf)), nfhs_usable=int(crosswalk[crosswalk.nfhs_usable].nfhs_district_key.nunique()),
-               crosswalk_issues=iss.issue.value_counts().to_dict())
+write_table(poly.drop(columns=["district_idx"]).assign(district_idx=poly.district_idx), "workspace.vf_silver.district_polygons", "One row per district polygon: state (by position), area, WorldPop 2020 population, centre and WKT geometry (notebook 11)")
+SUMMARY.update(pin_districts=int((crosswalk.source_list == "pin_district").sum()), pin_districts_linked=int(((crosswalk.source_list == "pin_district") & (crosswalk.link_status == "linked")).sum()),
+               nfhs_districts=int(len(nf)), nfhs_linked=int(((crosswalk.source_list == "nfhs_district") & (crosswalk.link_status == "linked")).sum()),
+               link_methods=crosswalk.groupby(["source_list", "link_status"]).size().rename(lambda x: x).to_frame("n").reset_index().values.tolist(),
+               polygons_with_nfhs=int(lp[lp.source_list == "nfhs_district"].polygon_district_id.nunique()),
+               crosswalk_issues=iss.issue.value_counts().to_dict(), states_linked=len(state_poly))
 
 # COMMAND ----------
 
@@ -338,7 +347,7 @@ for s in SERVICES:
 for name, lvl in LEVELS.items():
     grid[f"km_{name}"] = np.round(nearest(cell_xyz, lvg[lvg.care_level >= lvl])[0], 2)
     tier_counts.append((name, int((lvg.care_level >= lvl).sum()), None, None))
-G = pd.DataFrame(grid).merge(poly[["district_idx", "district_id", "district_name", "state_name"]], on="district_idx", how="left").drop(columns=["district_idx"])
+G = pd.DataFrame(grid).merge(poly[["district_idx", "district_id", "district_name", "state_name", "state"]], on="district_idx", how="left").drop(columns=["district_idx"])
 write_table(G, "workspace.vf_gold.access_grid",
             "One row per 1 km land cell (WorldPop 2020). km_* = STRAIGHT-LINE km to the nearest facility claiming the service; kmb_* = to the nearest better-evidenced one. Not travel time. Only facilities with a good location flag are used (notebook 11).")
 SUMMARY["facilities_used_per_class"] = {s: {"claimed": a, "better_evidenced": b, "service_externally_supported": c} for s, a, b, c in tier_counts}
@@ -366,7 +375,7 @@ b_lon = np.bincount(inv, weights=wz * G.longitude.values, minlength=nb) / b_w
 b_area = np.bincount(inv, weights=G.area_km2.values.astype("float64"), minlength=nb)
 # block district = district of its most populated cell
 order = np.lexsort((-wz, inv)); first = np.r_[True, inv[order][1:] != inv[order][:-1]]
-b_did = G.district_id.values[order][first]; b_dn = G.district_name.values[order][first]; b_st = G.state_name.values[order][first]
+b_did = G.district_id.values[order][first]; b_dn = G.district_name.values[order][first]; b_st = G.state_name.values[order][first]; b_sk = G.state.values[order][first]
 bxyz = xyz(b_lat, b_lon)
 
 gap_parts, dsa_parts = [], []
@@ -400,7 +409,7 @@ for s in SERVICES + list(LEVELS):
     f1 = a.facility_id.values[i1] if len(a) else np.full(nb, None); f2 = b.facility_id.values[i2] if len(b) else np.full(nb, None)
     gap_parts.append(pd.DataFrame({
         "block_id": ub, "service": s, "latitude": np.round(b_lat, 4), "longitude": np.round(b_lon, 4), "population": np.round(b_pop, 1),
-        "district_id": b_did, "district_name": b_dn, "state_name": b_st,
+        "district_id": b_did, "district_name": b_dn, "state_name": b_st, "state": b_sk,
         "km_claimed": np.round(k1, 2), "nearest_claimed_facility_id": f1,
         "km_better_evidenced": np.round(k2, 2), "nearest_better_evidenced_facility_id": f2,
         "km_service_supported": np.round(k3, 2),
@@ -410,7 +419,7 @@ for s in SERVICES + list(LEVELS):
 gap = pd.concat(gap_parts, ignore_index=True)
 write_table(gap, "workspace.vf_gold.access_evidence_gap",
             "Per 5 km block and service: nearest facility that claims the service vs nearest better-evidenced one (STRAIGHT-LINE km from the block population centre). differs = different facilities; gap_flag = better-evidenced is over 30 km further. Not travel time (notebook 11).")
-dsa = pd.concat(dsa_parts, ignore_index=True).merge(poly[["district_id", "district_name", "state_name", "population_2020", "area_km2"]], on="district_id", how="left")
+dsa = pd.concat(dsa_parts, ignore_index=True).merge(poly[["district_id", "district_name", "state_name", "state", "population_2020", "area_km2"]], on="district_id", how="left")
 for c in dsa.columns:
     if c.startswith(("pop_weighted", "area_weighted", "pct_")): dsa[c] = dsa[c].astype("float64").round(2)
     if c.startswith(("pop_beyond", "pop_where")): dsa[c] = dsa[c].round(0)
@@ -443,7 +452,7 @@ NFHS = {"institutional_birth_5y_pct": "nfhs_institutional_births_pct", "births_d
         "hh_use_improved_sanitation_pct": "nfhs_improved_sanitation_pct", "hh_electricity_pct": "nfhs_electricity_pct",
         "households_using_clean_fuel_for_cooking_pct": "nfhs_clean_cooking_fuel_pct", "all_w15_49_who_are_anaemic_pct": "nfhs_women_anaemic_pct"}
 nfv = spark.sql("SELECT state, district_key AS nfhs_district_key, " + ", ".join(NFHS) + " FROM workspace.vf_silver.nfhs_district").toPandas().rename(columns=NFHS)
-link = crosswalk[crosswalk.nfhs_usable][["state", "nfhs_district_key", "polygon_district_id"]].drop_duplicates()
+link = lp[lp.source_list == "nfhs_district"][["state", "district_key", "polygon_district_id"]].rename(columns={"district_key": "nfhs_district_key"}).drop_duplicates()
 nfp = link.merge(nfv, on=["state", "nfhs_district_key"]).groupby("polygon_district_id")
 nf_agg = nfp[list(NFHS.values())].mean().round(1)
 nf_agg["nfhs_districts_linked"] = nfp.nfhs_district_key.nunique()
@@ -479,8 +488,7 @@ fsd = fsd.merge(poly[["district_idx", "district_id"]], left_on="didx", right_on=
 cl = fsd.pivot_table(index="district_id", columns="service", values="facility_id", aggfunc="count", fill_value=0).add_prefix("claimed_")
 cb = fsd[fsd.better].pivot_table(index="district_id", columns="service", values="facility_id", aggfunc="count", fill_value=0).add_prefix("better_evidenced_")
 # suspect / missing positions, through the address district
-addr = fac.merge(crosswalk[crosswalk.pin_link_status.isin(["linked", "linked_low_evidence"])][["state", "pin_district_key", "polygon_district_id"]],
-                 left_on=["state", "district_key"], right_on=["state", "pin_district_key"], how="left")
+addr = fac.merge(lp[lp.source_list == "pin_district"][["state", "district_key", "polygon_district_id"]], on=["state", "district_key"], how="left")
 ga = addr[addr.polygon_district_id.notna()].groupby("polygon_district_id")
 adr = pd.DataFrame({"facilities_by_address": ga.size(), "facilities_suspect_or_no_location": ga.geo_flag.apply(lambda s: int((s != "good").sum()))})
 adr["pct_facilities_suspect_or_no_location"] = (100 * adr.facilities_suspect_or_no_location / adr.facilities_by_address).round(1)
@@ -518,6 +526,7 @@ SUMMARY.update(context_rows=int(len(ctx)), context_with_nfhs=int((ctx.nfhs_distr
 # MAGIC 2. **Distance:** the population-weighted straight-line distance to the nearest facility **claiming** the service is over 30 km.
 # MAGIC 3. **Deprivation:** its district is in the most deprived third on the NFHS-based score (institutional births, 4+ antenatal visits, women's literacy, sanitation, health insurance, child stunting).
 # MAGIC
+# MAGIC `priority_rank` orders the zones of one service and type by people x distance (1 = most people furthest away), so a map or a shortlist can take the top N.
 # MAGIC `zone_type = 'critical'` meets all three. `'far and populated, NFHS unknown'` meets 1 and 2 in a district with no NFHS link. `'far only on better evidence'` is within 30 km of a claimed facility but over 30 km from a better-evidenced one, in a most-deprived district.
 # MAGIC These thresholds are planning choices written down so they can be changed; 30 km is not a clinical rule, and the distance is straight-line.
 
@@ -533,8 +542,10 @@ dep = z.deprivation_tercile == "most deprived third"
 z["zone_type"] = np.select([far_c & dep, far_c & (z.nfhs_districts_linked.fillna(0) == 0), ~far_c & far_b & dep],
                            ["critical", "far and populated, NFHS unknown", "far only on better evidence"], default="")
 z = z[z.zone_type != ""].copy()
+z["people_km"] = (z.population * np.where(z.zone_type == "far only on better evidence", z.pop_weighted_km_better, z.pop_weighted_km_claimed)).round(0)
+z["priority_rank"] = z.groupby(["service", "zone_type"]).people_km.rank(ascending=False, method="first").astype("int64")
 z["criteria"] = f"block population >= {MIN_POP}; population-weighted straight-line km to nearest claimed facility > {GAP_KM} (or better-evidenced, for the third type); district in the most deprived NFHS third"
-zones = z[["block_id", "service", "zone_type", "latitude", "longitude", "population", "district_id", "district_name", "state_name",
+zones = z[["block_id", "service", "zone_type", "priority_rank", "people_km", "latitude", "longitude", "population", "district_id", "district_name", "state_name", "state",
            "pop_weighted_km_claimed", "pop_weighted_km_better", "nearest_claimed_facility_id", "nearest_better_evidenced_facility_id",
            "deprivation_score", "deprivation_tercile", "criteria"]].rename(columns={"pop_weighted_km_claimed": "straight_km_claimed", "pop_weighted_km_better": "straight_km_better_evidenced"})
 write_table(zones, "workspace.vf_gold.critical_zones",
@@ -623,8 +634,8 @@ SELECT check_name, bad_rows, bad_rows = 0 AS passed, detail, current_timestamp()
             JOIN workspace.vf_silver.facility_geo_quality q ON q.facility_id = x.f WHERE q.geo_flag <> 'good'), 'precise distances use good locations only'
   UNION ALL SELECT 9, 'gap table: one row per block and service, gap never negative',
          (SELECT count(*) - count(DISTINCT block_id, service) + sum(CAST(gap_km < -0.05 AS INT)) FROM workspace.vf_gold.access_evidence_gap), ''
-  UNION ALL SELECT 10, 'crosswalk never links an NFHS district without a state match',
-         (SELECT count(*) FROM workspace.vf_gold.district_crosswalk WHERE nfhs_district_key IS NOT NULL AND polygon_district_id IS NOT NULL AND nfhs_link_method IS NULL), 'no name-only joins'
+  UNION ALL SELECT 10, 'crosswalk links always carry a method and a state',
+         (SELECT count(*) FROM workspace.vf_gold.district_crosswalk WHERE (polygon_district_id IS NOT NULL AND (link_method IS NULL OR polygon_state_name IS NULL)) OR (link_status = 'linked' AND polygon_district_id IS NULL)), 'every link has a method and a state; no name-only joins'
   UNION ALL SELECT 11, 'critical zones meet their own criteria',
          (SELECT count(*) FROM workspace.vf_gold.critical_zones WHERE population < {MIN_POP} OR (zone_type = 'critical' AND (straight_km_claimed <= {GAP_KM} OR deprivation_tercile <> 'most deprived third'))), ''
   UNION ALL SELECT 12, 'NFHS percentages in district_context are within 0 to 100',
