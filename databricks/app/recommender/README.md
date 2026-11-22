@@ -105,7 +105,7 @@ What the numbers in this package do and do not mean:
 * Facilities with a suspect or invalid location are never ranked by travel time.
 * A facility is named as "stabilise here first" only if it meets all of these: it states emergency care directly (a strong or moderate claim, not a specialty tag), it is care level 3 or higher, none of its claims has a plausibility flag, and it is not single-specialty (judged by level_kind or by name, using the same pattern as notebook 04). This rule was added after a live test named an eye hospital.
 
-Tests: `python -m pytest -q tests` from the `app/` folder (77 tests, 40 of them must-never-happen cases in `tests/test_negative_cases.py`, including the known wrong-claim cases: dental delivery unit, dental trauma, DVT thrombolysis, eye-hospital emergency).
+Tests: `python -m pytest -q tests` from the `app/` folder (79 tests, 40 of them must-never-happen cases in `tests/test_negative_cases.py`, including the known wrong-claim cases: dental delivery unit, dental trauma, DVT thrombolysis, eye-hospital emergency).
 
 ## Validation without outcome labels
 

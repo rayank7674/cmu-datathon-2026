@@ -1,6 +1,6 @@
 # Virtue Foundation facility data: medallion pipeline
 
-*Running document. Last updated 2026-11-21. Add a line to the change log at the bottom whenever something in the pipeline changes.*
+*Running document. Last updated 2026-11-22. Add a line to the change log at the bottom whenever something in the pipeline changes.*
 
 This README explains what the pipeline does, the order to run it in, and **why** each decision was made: the evidence behind it, the trade-offs, and what it buys us. Read it first if you are new to the project or about to change a notebook.
 
@@ -378,6 +378,9 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-22 | Final hand check of 60 claims (20 per strength): strong 20 of 20 supported, moderate 16 of 20 (2 wrong), weak 7 of 20 (1 wrong, 8 label only); about 6% wrong when weighted. `facility_service_handcheck_final`. See section 24 |
 | 2026-11-22 | Hand review of the 289 held matches (notebook 19): 245 accepted as medium, 16 rejected, 28 left for Ishaan; decisions in `ext_match_review_decisions`, Task D tables untouched; facilities with outside evidence 1,253 to 1,455. See section 25 |
 | 2026-11-22 | App redeployed (Ishaan, 12:15 UTC): final recommender (`app/recommender/`, `symptom_ui.py`: claim reliability from the section 24 hand check, published time curves with a "When did it start?" input; see `app/recommender/README.md`) and a Genie "ask the data" tab (`genie_chat.py`) over 7 gold tables. Genie space "Facility Finder data" created in this folder and attached to the app as resource `genie-space` (CAN_RUN); the space is told to give no medical advice. Previous live version backed up in project files `app_live_backup_1218UTC/` |
+| 2026-11-22 | App start point (13:15 UTC): when a district is chosen, distances start from that district's most populated 1 km cell (`app/data/district_towns.csv`, one row per district, from the WorldPop grid of section 11 notebooks) instead of the district centroid. This is a stand-in for "the main town", not the person's position. |
+| 2026-11-22 | App interface rebuilt (14:05 to 16:17 UTC, several deploys): three pages, Patient (chat, default), EMR (`/emr`) and Policymaker (`/policy`), dark mode, new files `patient_chat.py`, `llm_explain.py`, `emr_panel.py`, `policy_priority.py`, `ui_theme.py`, `DESIGN.md`. New app resource `serving-endpoint` (`databricks-meta-llama-3-3-70b-instruct`, CAN_QUERY, env `LLM_ENDPOINT`): the model only words the explanation from facts the recommender already produced; ranking, distances and evidence do not come from it. Genie tab kept. |
+| 2026-11-22 | App location options (15:25 and 16:24 UTC): "use my location" (browser geolocation) and a typed address. The typed address is sent to OpenStreetMap Nominatim to get coordinates and is not saved. The address lookup was not tested end to end before deploy (the lookup service is not reachable from the build machine), so treat it as unverified until someone confirms it on the live app. Live deployment `01f1e69128b71da8975375cf4272c5c9`; rollback copies of every earlier live version are in the project files as `app_live_backup_<time>UTC`. |
 
 ## 12. Implemented: service search tables (chunk C, notebook 09)
 

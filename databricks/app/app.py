@@ -12,6 +12,7 @@ import base64
 import io
 import json
 import os
+import sys
 import uuid
 from datetime import datetime, timezone
 
@@ -32,7 +33,10 @@ GOLD = f"{CATALOG}.vf_gold"
 SILVER = f"{CATALOG}.vf_silver"
 FEEDBACK_TABLE = f"{GOLD}.feedback_reports"
 
-st.set_page_config(page_title="Facility Finder (India)", page_icon="🏥", layout="wide")
+import ui_theme as ui
+import patient_chat
+import emr_panel
+import policy_priority
 
 
 # --------------------------------------------------------------------------
@@ -233,6 +237,18 @@ def load_zones(district_id: str, service: str) -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_zone_summary(service: str) -> pd.DataFrame:
+    """Critical zones for one service, counted per district."""
+    df = query(f"""
+        SELECT district_id, service, zone_type, count(*) AS zones, sum(population) AS population
+        FROM {GOLD}.critical_zones WHERE service = :s GROUP BY district_id, service, zone_type
+    """, {"s": service})
+    for col in ("zones", "population"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
 @st.cache_data(ttl=3600, show_spinner="Loading catchments...")
 def load_catchments(service: str, tier: str) -> pd.DataFrame:
     df = query(f"""
@@ -310,7 +326,6 @@ def safety_block():
         "This is a facility discovery tool, not medical triage. It cannot tell you what care you "
         "need, and it does not know whether a service is open or working right now. "
         "Phone the facility before you travel.",
-        icon="🚨",
     )
 
 
@@ -334,7 +349,7 @@ def resolved_notes(r):
     """Lines for values where the team chose the outside source over the facility's own record."""
     out = []
     if clean(r.get("nabh_status_resolved")) == "withdrawn":
-        out.append("⚠️ **NABH accreditation withdrawn.** The NABH directory lists this facility's accreditation as "
+        out.append("**NABH accreditation withdrawn.** The NABH directory lists this facility's accreditation as "
                    "withdrawn, although the facility's own text says it is accredited. The directory is used "
                    "(team decision, 22 Nov 2026).")
     if clean(r.get("beds_resolution_source")) == "external" and clean(r.get("capacity_beds")) is not None:
@@ -474,13 +489,13 @@ def results_map(ranked, search, height=380):
     st.pydeck_chart(pdk.Deck(layers=layers, tooltip={"text": "{tip}"},
                              initial_view_state=pdk.ViewState(latitude=search["lat"], longitude=search["lon"], zoom=zoom)),
                     height=height)
-    st.caption("Teal dots: facilities that claim the service. Black dot: your starting point. Hover a dot for its name.")
+    st.caption("Small dots are the facilities listed. The larger dot is your starting point. Hover a dot for its name.")
 
 
 def results_header(search, labels, ranked, unplaced):
     safety_block()
     st.subheader(f"{labels[search['service']]} near {search['label']}")
-    st.warning(PLACEHOLDER_NOTE, icon="⚠️")
+    st.warning(PLACEHOLDER_NOTE)
     n_dir = int(ranked["directory_only"].fillna(False).astype(bool).sum()) if "directory_only" in ranked else 0
     notes = [f"{len(ranked) - n_dir} facilities in this dataset say they offer this within {search['radius_km']} km (straight line)."]
     if n_dir:
@@ -518,25 +533,25 @@ def patient_card(r, profile, key):
         c1.markdown(f"**How sure are we?**  \n{'Directory listing only: the facility itself does not say this.' if directory_only else STRENGTH_PLAIN.get(r['claim_strength'], 'Unknown.')}")
         c2.markdown(f"**Has anyone checked?**  \n{VERIFY_PLAIN.get(r['verification_status'], 'Not checked.')}")
         if clean(r["plausibility_flag"]):
-            st.markdown(f"⚠️ **Treat with care:** {r['plausibility_flag']}.")
+            st.markdown(f"**Treat with care:** {r['plausibility_flag']}.")
         for note in resolved_notes(r):
             st.markdown(note)
 
         phone = clean(r["contact_phone"])
         if phone:
-            st.markdown(f"📞 **Call before you go:** [{phone}](tel:{phone}) (number not checked)")
+            st.markdown(f"**Call before you go:** [{phone}](tel:{phone}) (number not checked)")
         else:
-            st.markdown("📞 No phone number in the dataset.")
+            st.markdown("No phone number in the dataset.")
 
         scheme = profile.get("insurance")
         if scheme == "PM-JAY (Ayushman Bharat)":
-            st.markdown("🪪 It says it accepts PM-JAY (its own claim, not checked against the official list)."
-                        if r.get("pmjay_claimed") is True else "🪪 PM-JAY: unknown for this facility.")
+            st.markdown("It says it accepts PM-JAY (its own claim, not checked against the official list)."
+                        if r.get("pmjay_claimed") is True else "PM-JAY: unknown for this facility.")
         elif scheme == "CGHS":
-            st.markdown("🪪 It says it is CGHS empanelled (its own claim, not checked)."
-                        if r.get("cghs_claimed") is True else "🪪 CGHS: unknown for this facility.")
+            st.markdown("It says it is CGHS empanelled (its own claim, not checked)."
+                        if r.get("cghs_claimed") is True else "CGHS: unknown for this facility.")
         elif scheme and scheme != "Prefer not to say":
-            st.markdown(f"🪪 {scheme}: unknown for this facility.")
+            st.markdown(f"{scheme}: unknown for this facility.")
 
         with st.expander("Why this hospital?"):
             st.markdown(r["rank_reason"])
@@ -921,21 +936,17 @@ def legend(extra=""):
 
 def tab_policy(claims, facilities, districts, access):
     global BLUE_RAMP, FAC_LINE, ACCENT
-    st.markdown("Where are people far from a facility that claims a service, and how much of that picture rests on "
-                "weak evidence? Distances are straight-line and only to the roughly 10,000 facilities in this dataset.")
-    with st.expander("Your role (optional, kept only for this session)"):
-        c = st.columns(2)
-        c[0].selectbox("Role", ["State health department", "District administration", "NGO / funder",
-                                "Researcher", "Other"], key="g_role")
-        c[1].text_input("Organisation (optional)", key="g_org")
+    st.markdown("<h1>Where is care out of reach?</h1><p class='vf-lede'>Districts ranked by how many people live far "
+                "from a facility that claims a service.</p>", unsafe_allow_html=True)
     services = claims[["service", "service_label"]].drop_duplicates().sort_values("service_label")
     labels = dict(zip(services["service"], services["service_label"]))
     c1, c2, c3 = st.columns([3, 3, 1])
-    service = c1.selectbox("Service", list(labels), format_func=labels.get, key="g_service")
+    service = c1.selectbox("Service", list(labels), format_func=labels.get, key="g_service",
+                           index=list(labels).index("emergency") if "emergency" in labels else 0)
     tier = c2.radio("Evidence tier", ["Any claim", "Better-evidenced claims only"], horizontal=True, key="g_tier",
                     help="Better-evidenced = direct wording, no plausibility flag, a usable location, and the facility is "
                          "matched in an outside source. Still self-reported, not verified.")
-    palette = c3.selectbox("Map colours", list(PALETTES), key="g_palette")
+    palette = c3.selectbox("Map colours", list(PALETTES), key="g_palette", index=list(PALETTES).index("Teal"))
     BLUE_RAMP = PALETTES[palette]
     FAC_LINE = [*BLUE_RAMP[-1], 255]
     ACCENT = ACCENTS[palette]
@@ -948,7 +959,6 @@ def tab_policy(claims, facilities, districts, access):
                           & ((svc_fac["facility_existence_status"] == "externally_supported")
                              | svc_fac["verification_status"].isin(["externally_supported", "verified"]))]
 
-    st.subheader("National overview")
     if districts is None or access is None:
         st.info("District access tables are not available, so the map shows facility points only.")
         pts = svc_fac[["name", "latitude", "longitude"]].copy()
@@ -972,6 +982,12 @@ def tab_policy(claims, facilities, districts, access):
     fpts = svc_fac[["name", "latitude", "longitude"]].copy()
     fpts["tip"] = fpts["name"] + "\n(claims the service)"
     tier_key = "claimed" if tier == "Any claim" else "better_evidenced"
+    try:
+        policy_priority.render(d, labels[service], tier, pct_col, optional(load_public_facilities),
+                               optional(lambda: load_zone_summary(service)), access, districts, labels)
+    except Exception as e:  # the map below still works without the priority list
+        st.warning(f"The priority list could not be built ({type(e).__name__}).")
+    st.markdown("<h2>The map behind the list</h2>", unsafe_allow_html=True)
     cat = optional(lambda: load_catchments(service, tier_key))
     FAC_CHIP = ("<span style='display:inline-flex;align-items:center'><span style='width:8px;height:8px;border-radius:50%;"
                 "background:rgb(28,28,38);border:1px solid #bbb;display:inline-block;margin-right:4px'></span>facility claiming the service</span>")
@@ -1037,7 +1053,7 @@ def tab_policy(claims, facilities, districts, access):
                        f"this dataset, yet the government counts {int(govt['govt_hospitals'].sum()):,} community health "
                        "centres or hospitals in them (Rural Health Statistics, March 2022). They are ringed on the map. "
                        "The report gives counts, not locations, so we cannot say how far those facilities are from anyone, "
-                       "and no catchment is drawn for them.", icon="⚠️")
+                       "and no catchment is drawn for them.")
         if shade == "Distance from its facility":
             gradient_legend(FAC_CHIP + CRIT_CHIP)
         elif shade == "Area":
@@ -1074,12 +1090,6 @@ def tab_policy(claims, facilities, districts, access):
         st.caption("One circle per district, placed at its centre and sized by population. Darker means the average "
                    "resident is closer to the nearest facility claiming the service; pale means far. Hover for figures.")
 
-    m = st.columns(4)
-    far = d[d["km"] > 30]
-    m[0].metric("Facilities claiming it (usable location)", f"{len(svc_fac):,}")
-    m[1].metric("Districts where the average person is over 30 km away", f"{len(far)} of {len(d)}")
-    m[2].metric("People living in those districts", f"{far['population_2020'].sum() / 1e6:,.0f} million")
-    m[3].metric("Verified by an official source", "0")
     with st.expander("Districts furthest from this service (table view)"):
         t = d.sort_values("km", ascending=False)[["district_name", "state_name", "population_2020", "km", pct_col,
                                                   "facilities_located", "deprivation_tercile"]].head(100)
@@ -1197,9 +1207,9 @@ def tab_policy(claims, facilities, districts, access):
 # Page
 # --------------------------------------------------------------------------
 def main():
-    st.title("Facility Finder (India)")
-    st.caption("Datathon prototype. Every claim below is what a facility says about itself unless marked otherwise.")
-    safety_block()
+    st.set_page_config(page_title="Facility Finder (India)", layout="wide")
+    ui.inject()
+    ui.emergency_strip()   # 108 / 112 first on every view, never behind a control
     try:
         claims = load_claims()
     except Exception as e:
@@ -1217,23 +1227,36 @@ def main():
         except Exception:
             pass  # keep the geometric centres
     access = optional(load_district_access)
-    if not ensure_feedback_table():
-        st.caption("Feedback table is not writable right now, so reports may not save.")
+    feedback_ok = ensure_feedback_table()
 
-    names = ["Policy makers", "EMRs (emergency responders)", "Patients"]
-    if genie_chat.enabled():  # only when a Genie space is attached to the app
-        names.append("Ask the data")
-    tabs = st.tabs(names)
-    t_policy, t_emr, t_patient = tabs[:3]
-    if genie_chat.enabled():
-        with tabs[3]:
-            genie_chat.tab_genie()
-    with t_policy:
+    def page_patient():
+        patient_chat.view(claims, districts, location_input, results_map)
+        with st.expander("Search by service instead"):
+            tab_patients(claims, districts)
+
+    def page_emr():
+        emr_panel.view(claims, districts, sys.modules[__name__])
+
+    def page_policy():
         tab_policy(claims, facilities, districts, access)
-    with t_emr:
-        tab_emrs(claims, districts)
-    with t_patient:
-        tab_patients(claims, districts)
+        if genie_chat.enabled():
+            # inside an expander the chat box sits in the page flow; at page level it pins to the
+            # bottom and makes the whole view open scrolled to the end
+            with st.expander("Ask a question about the data"):
+                genie_chat.tab_genie()
+                who = ui.signed_in_user()
+                st.caption((f"You are signed in as {who}. " if who else "") + "Queries run with the app's own service "
+                           "account, not your personal permissions. Answers are written by an AI data assistant: check "
+                           "the SQL it shows before relying on a number.")
+
+    pages = [st.Page(page_patient, title="Patient", url_path="patient", default=True),
+             st.Page(page_emr, title="EMR", url_path="emr"),
+             st.Page(page_policy, title="Policymaker", url_path="policy")]
+    st.navigation(pages, position="top").run()
+    st.caption("Facility Finder (India), a datathon prototype. Every claim shown is what a facility says about itself "
+               "unless marked otherwise. Nothing is independently verified."
+               + ("" if feedback_ok else " Feedback reports may not save right now."))
 
 
-main()
+if os.getenv("VF_NO_MAIN") != "1":
+    main()

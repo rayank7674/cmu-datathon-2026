@@ -17,15 +17,15 @@ ONSET_CHOICES = {"Just now (under 15 min)": 0, "About 30 min ago": 30, "About 1 
                  "About 6 hours ago": 360, "About 12 hours ago": 720, "A day ago or more": 1440}
 STRENGTH_SHORT = {"strong": "states it in 2+ places", "moderate": "states it once",
                   "weak": "only a label or hint", None: "not stated"}
-TIER_BADGE = {1: "🟢 States everything needed", 2: "🟢 States an accepted alternative for everything",
-              3: "🟡 States part of what is needed", 4: "🟠 Only a label or hint", 5: "⚪ States none of it"}
+TIER_BADGE = {1: "States everything needed", 2: "States an accepted alternative for everything",
+              3: "States part of what is needed", 4: "Only a label or hint", 5: "States none of it"}
 
 
 def _pct(x):
     return f"{x:.0%}" if x >= 0.01 else "<1%"
 
 
-def symptom_form(key, location_input, districts):
+def symptom_form(key, location_input, districts, narrow=False):
     kb = load(Config().knowledge_dir)
     sym = kb.symptoms.sort_values("label")
     labels = dict(zip(sym["symptom"], sym["label"]))
@@ -33,7 +33,7 @@ def symptom_form(key, location_input, districts):
                             key=f"{key}_sym")
     extra = st.text_input("Anything else, in your own words (optional)", key=f"{key}_symtext",
                           placeholder="e.g. fell off a bike, hit head, feeling dizzy")
-    c1, c2, c3 = st.columns([3, 1, 1])
+    c1, c2, c3 = (st.container(), st.container(), st.container()) if narrow else st.columns([3, 1, 1])
     transport = c1.multiselect("How can you travel?", list(TRANSPORT_LABELS), format_func=TRANSPORT_LABELS.get,
                                default=["ambulance_108", "auto_taxi"], key=f"{key}_tr")
     pregnant = c2.checkbox("Pregnant", key=f"{key}_preg")
@@ -68,7 +68,7 @@ def run_symptom_search(claims, search):
 def show_alerts(res):
     for a in res["alerts"]:
         {"critical": st.error, "warning": st.warning, "advice": st.info}.get(a["level"], st.caption)(
-            a["text"], **({"icon": "🚨"} if a["level"] == "critical" else {}))
+            a["text"])
 
 
 def show_conditions(res):
@@ -91,9 +91,9 @@ def show_conditions(res):
 
 def hospital_card(e, row, key, compact=False):
     with st.container(border=True):
-        tag = "  \n📍 **Closer option to raise with the 108 crew**" if e["stabilise"] else ""
-        badge = f" · {TIER_BADGE.get(e.get('tier'))}" if e.get("tier") else ""
-        st.markdown(f"**{e['rank']}. {e['name']}** · ⏱ **about {e['minutes']:.0f} min**{badge}  \n"
+        tag = "  \n**Closer option to raise with the 108 crew**" if e["stabilise"] else ""
+        badge = f". {TIER_BADGE.get(e.get('tier'))}" if e.get("tier") else ""
+        st.markdown(f"**{e['rank']}. {e['name']}**, about {e['minutes']:.0f} min{badge}  \n"
                     f"{row.get('district') or ''}, {str(row.get('state') or '').title()} · "
                     f"care level {e['care_level']}{tag}")
         st.markdown(e["summary"])
@@ -107,12 +107,12 @@ def hospital_card(e, row, key, compact=False):
         tb = main.get("time_basis")
         if tb and tb.get("status") == "published":
             src = f"[{tb['source']}]({tb['url']})" if tb.get("url") else tb.get("source")
-            st.caption(f"⏳ Why time matters here: {tb['label'].lower()}. {src}. "
+            st.caption(f"Why time matters here: {tb['label'].lower()}. {src}. "
                        "A finding about one treatment in another setting, shown for urgency, not as a prediction.")
         phone = row.get("contact_phone")
         if isinstance(phone, str) and phone.strip():
             tel = "".join(ch for ch in phone if ch.isdigit() or ch == "+")
-            st.markdown(f"📞 **Call before you go:** [{phone}](tel:{tel}) (number not checked)")
+            st.markdown(f"**Call before you go:** [{phone}](tel:{tel}) (number not checked)")
         with st.expander("What its own text says, for each possibility"):
             st.dataframe(pd.DataFrame([{
                 "Possibility": p["label"],
