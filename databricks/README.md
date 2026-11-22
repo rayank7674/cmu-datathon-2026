@@ -371,6 +371,8 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-22 | Rural Hospital Network: 42 self-reported profiles loaded (`vf_bronze.ext_rhn_profiles_raw`) and matched in notebook 14 by name, state and place: 5 accepted (medium), 3 ambiguous, 3 bed differences flagged. See section 19 |
 | 2026-11-22 | Team decision: trust the external source on value conflicts. `vf_gold.facility_resolved_values` built in notebook 15 (7 beds, 17 founding years, 2 NABH withdrawn; originals kept); app cards read it. See section 20 |
 | 2026-11-22 | Team decision: also fill missing beds, founding year and doctors from accepted outside matches (`external_gap_fill` in `facility_resolved_values`): 4 beds, 10 founding years, 1 doctor count. See section 20 |
+| 2026-11-22 | Task B text extraction audited (notebook 16): raw error about 36% beds, 27% founding year, 5% doctors; only plain statements kept and used as `text_gap_fill` (54 beds, 73 years, 103 doctor counts). See section 21 |
+| 2026-11-22 | Matching second pass (notebook 17): 136 eRaktKosh and 27 Wikidata matches added as medium, 94 ambiguous; view `ext_facility_matches_all` read by notebooks 09 and 13; facilities with outside evidence 1,144 to 1,253. See section 22 |
 
 ## 12. Implemented: service search tables (chunk C, notebook 09)
 
@@ -845,6 +847,8 @@ Team rule (Ishaan, 2026-11-22): any area more than 150 km in a straight line fro
 
 ## 18. Implemented: Task D evidence in chunk C (notebooks 09 and 13)
 
+> The counts in this section are from the first run. After the second matching pass they changed; see section 22 for the current figures.
+
 **Implemented and tested on 2026-11-22.** The teammate's Task D tables (NABH 21,582 records, eRaktKosh 6,524, Wikidata 2,772; 1,186 accepted matches on 1,144 facilities) are now used by chunk C. Everything is additive: notebooks 01 to 06 and every `ext_` table are untouched, no Virtue Foundation claim or quote was changed, and no clinical service was upgraded to verified.
 
 ### 18.1 Rules applied
@@ -970,6 +974,8 @@ Ambiguous, for review: Vishnu Dental Care against Vishnu Dental College (Bhimava
 
 ## 20. Implemented: resolved values, "trust the external source" (notebook 15)
 
+> Counts in this section were updated after the second matching pass (section 22) and the text audit (section 21): beds from outside 8, founding years 19, NABH 2; outside gap fills 4 beds, 12 founding years, 1 doctor count; text gap fills 54 beds, 73 founding years, 103 doctor counts. Coverage of 9,989 facilities: beds 2,496 to 2,554, founding year 4,768 to 4,853, doctors 3,613 to 3,717. Checks 13 of 13.
+
 **Team decision (Ishaan, 2026-11-22):** where an accepted outside record conflicts with the Virtue Foundation record, trust the outside source. Applied additively in `vf_gold.facility_resolved_values` (one row per facility, 9,989). Original values are kept in `vf_beds`, `vf_year_founded` and `vf_nabh_claimed`; silver and every other table are unchanged.
 
 | Field | Facilities changed | From |
@@ -987,6 +993,57 @@ Each changed row has `..._resolution_source = 'external'`, the outside source na
 Not covered: the ambiguous matches stay held for review; no clinical service is affected. A resolved value is a team decision, not a verification, and the outside values are undated.
 
 App: the Patients and EMRs cards read the resolved values. They show a warning for the 2 facilities whose NABH accreditation is withdrawn, and a beds line where the outside figure is used. The ranking and the symptom recommender do not use beds, founding year or NABH status, so their order is unchanged.
+
+---
+
+## 21. Implemented: text extraction (Task B) and its audit (notebooks `07_Facility_Attribute_Extraction` and 16)
+
+**Task B (a teammate's notebook, `07_Facility_Attribute_Extraction`).** It reads each facility's own text (description, capabilities, equipment, procedures) with strict regular expressions and writes `vf_silver.facility_extracted_attributes`: 7,042 rows on 4,926 facilities, one row per facility and attribute (`beds`, `doctors`, `year_founded`, `icu_beds`), each with the matched quote, the source field, a confidence and a `review_status`.
+
+| `review_status` | Meaning | Rows |
+| --- | --- | ---: |
+| `existing_agrees` | the text gives the same value the record already has | 4,483 |
+| `candidate_fill` | the record has no value and the text gives one | 700 (beds 137, doctors 135, founding year 151, ICU beds 277) |
+| `conflict` | the text gives a different value from the record | 638 |
+| `ambiguous` | the text gives several values, or an approximate or qualified one | 1,221 |
+
+Task B never wrote into the facility record. Nothing used its output until this audit.
+
+**Audit (notebook 16, 2026-11-22).** 22 random `candidate_fill` rows per attribute were read by hand against the full source sentence.
+
+| Attribute | Wrong in sample | What went wrong |
+| --- | --- | --- |
+| beds | 8 of 22 (36%) | the number belongs to a unit or ward ("5-bed ICCU", "20 bed emergency department"), a plan ("aims to establish a 500-bed hospital"), a group total, or beds set aside for one purpose |
+| founding year | 6 of 22 (27%) | "since YEAR" about a doctor, a registration, an accreditation or one department |
+| doctors | 1 of 22 (5%) | "12 doctors and staff" |
+| ICU beds | 0 of 22 | none found |
+
+The raw candidates are therefore not safe to use as they are. Notebook 16 keeps a value only when the whole clause that holds it is a plain statement about the facility ("Has 100 beds", "60-bed hospital", "Established in 1995", "Operating since 2017", "Has 11 doctors on staff"), the value is in range, and the facility has one such value. A second hand check of 40 passing rows per attribute found no wrong value. Result in `vf_silver.facility_extracted_attributes_audit` (700 rows with the clause, `audit_pass` and `audit_reason`): beds 54 of 137 pass, founding year 73 of 151, doctors 103 of 135. ICU beds are not used by any resolved field yet. The teammate's table is unchanged.
+
+**Use.** Passing values fill gaps in `vf_gold.facility_resolved_values` as `text_gap_fill` (section 20), only where neither the record nor an outside source has a value: 54 beds, 73 founding years, 103 doctor counts, each with its quote.
+
+**Limits.** These are the facility's own words, not outside evidence. "Has N doctors available" usually comes from a listing site and may count visiting doctors. The samples are small (22 and 40 per attribute), so the error rates are rough. `conflict` and `ambiguous` rows were not audited or used. The facilities' linked websites were not read.
+
+---
+
+## 22. Implemented: matching, second pass (notebook 17)
+
+Task D's matcher compares whole name strings, so it rejected true matches whose outside name has extra words ("Jaslok Hospital And Research Centre, Blood Centre", 20 m from "Jaslok Hospital and Research Center"). Notebook 17 re-reads Task D's rejected Wikidata and eRaktKosh candidates within 1 km and compares the distinctive name words. Task D's tables are unchanged: decisions are in `vf_silver.ext_facility_matches_pass2`, and the view `vf_silver.ext_facility_matches_all` lays them over Task D's rows. Notebooks 09 and 13 now read the view.
+
+**Rule.** Drop noise words (hospital, blood, centre, bank, research, ltd, speciality and similar) and the facility's own city, district and state. Accept as medium, never high, when the remaining words are the same (one or two letters of spelling difference allowed) and the points are within 0.5 km, or 0.3 km when one word is left. Similar but not the same within 1 km is ambiguous. Different place words on the two sides is ambiguous. One-to-one only.
+
+| Source | New accepted (medium) | New ambiguous (review) |
+| --- | ---: | ---: |
+| eRaktKosh | 136 | 69 |
+| Wikidata | 27 | 25 |
+
+All 163 new accepted pairs were read by hand; two wrong ones in the first run (a Dausa hospital against a Baran record, and a Kota college against "New Hospital Medical College") led to the place-word rule and to keeping "new" as a name word, and both are now ambiguous.
+
+**Effect (after rerunning 09, 13 and 15).** Facilities with accepted outside evidence 1,144 to 1,253. eRaktKosh accepted matches 67 to 203; facilities listed with a blood bank but no claim of their own 29 to 102 (all shown in the app's blood bank search as directory listings). Wikidata accepted matches 133 to 160. `externally_supported` service rows 87 to 222, verified still 0. Facilities with outside support that they exist 3,315 to 3,363. Contradictions 23 to 26 (one more beds, two more founding years), all resolved to the outside value under the team decision. Outside gap fills: founding year 10 to 12. Ambiguous matches held for review 192 to 286. `external_integration_checks` 15 of 15, `facility_service_checks` 16 of 16, `resolved_values_checks` 13 of 13.
+
+**OpenStreetMap.** Not in this pass. It was already matched by distance and name in notebook 06, and its export has no bed counts (the capacity column is empty for all 139,664 rows), so it cannot fill beds.
+
+**Limits.** The new matches gain little for beds, doctors and founding year because eRaktKosh carries none of them and few Wikidata hospitals have them. Candidates beyond 2 km were never generated by Task D, so a facility with a wrong map pin is still missed.
 
 ---
 

@@ -315,6 +315,9 @@ def resolved_notes(r):
         out.append(f"Beds: {int(float(r['capacity_beds']))} according to {r['beds_external_source']} "
                    "(the facility's record gave no figure; filled from the outside source by team decision, "
                    "it is not a verification).")
+    if clean(r.get("beds_resolution_source")) == "text_gap_fill" and clean(r.get("capacity_beds")) is not None:
+        out.append(f"Beds: {int(float(r['capacity_beds']))}, taken from a plain statement in the facility's own text "
+                   "(its record had no bed field; this is its own claim).")
     return out
 
 
