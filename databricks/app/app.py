@@ -25,6 +25,7 @@ from databricks.sdk.core import Config
 from ranking import MIN_LEVEL, PLACEHOLDER_NOTE, haversine_km, rank
 from symptom_ui import run_symptom_search, show_result, symptom_form
 import genie_chat
+from origin import add_district_towns
 
 CATALOG = os.getenv("VF_CATALOG", "workspace")
 GOLD = f"{CATALOG}.vf_gold"
@@ -389,9 +390,16 @@ def location_input(key, districts):
         name = c2.selectbox("District", names, key=f"{key}_district",
                             index=names.index("Patna") if "Patna" in names else 0)
         row = sub[sub["district_name"] == name].iloc[0]
+        town = clean(row.get("town_lat")) is not None and clean(row.get("town_lon")) is not None
+        if town:  # most populated spot inside the district, i.e. its main town
+            return {"lat": float(row["town_lat"]), "lon": float(row["town_lon"]),
+                    "district": name, "label": f"main town of {name} district, {state}",
+                    "approx": "Distances are measured from the main town of the district (its most populated "
+                              "spot), so they are rough. Enter a PIN code for a closer estimate."}
         return {"lat": float(row["centre_lat"]), "lon": float(row["centre_lon"]),
                 "district": name, "label": f"centre of {name} district, {state}",
-                "approx": "Distances are measured from the centre of the district, so they are rough."}
+                "approx": "Distances are measured from the centre of the district, so they are rough. "
+                          "Enter a PIN code for a closer estimate."}
     if mode == "PIN code":
         pin = st.text_input("6-digit PIN code", key=f"{key}_pin", max_chars=6, placeholder="e.g. 800001")
         if not pin:
@@ -1203,6 +1211,11 @@ def main():
                                                             "latitude", "longitude", "care_level", "level_kind"]].dropna(
             subset=["latitude", "longitude"])
     districts = optional(load_districts)
+    if districts is not None:
+        try:
+            districts = add_district_towns(districts)
+        except Exception:
+            pass  # keep the geometric centres
     access = optional(load_district_access)
     if not ensure_feedback_table():
         st.caption("Feedback table is not writable right now, so reports may not save.")
