@@ -137,7 +137,7 @@ CREATE OR REPLACE FUNCTION workspace.vf_silver.norm_claim(s STRING) RETURNS STRI
 COMMENT 'Normalise a claim for matching: split camelCase, lowercase, drop filler verbs and punctuation'
 RETURN nullif(trim(regexp_replace(
   regexp_replace(
-    regexp_replace(lower(regexp_replace(s, '([a-z])([A-Z])', '$1 $2')), '[^a-z0-9+/ ]', ' '),
+    regexp_replace(lower(regexp_replace(s, '(?<=[a-z])(?=[A-Z])', ' ')), '[^a-z0-9+/ ]', ' '),
     '^ *(provides|provide|offers|offer|performs|perform|has|have|manages|manage|available|availability of|facility for|facilities for|services for) +', ''),
   ' +', ' ')), '');
 
