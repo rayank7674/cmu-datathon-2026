@@ -6,6 +6,8 @@
 # MAGIC | Object | What it is |
 # MAGIC |---|---|
 # MAGIC | `vf_gold.service_catchments` | One row per catchment polygon piece: service, evidence tier, facility, area, people inside, polygon as JSON |
+# MAGIC | `vf_gold.critical_zones_emergency_150km` | 5 km blocks over 150 km from life-threatening-capable care (section 5) |
+# MAGIC | `vf_gold.life_threatening_capable_facilities` | The facilities that rule uses |
 # MAGIC | `vf_gold.catchment_checks` | Pass/fail tests |
 # MAGIC
 # MAGIC Rules
@@ -183,6 +185,65 @@ ck = pd.DataFrame(checks, columns=["test", "passed", "detail"])
 spark.createDataFrame(ck).write.mode("overwrite").option("overwriteSchema", "true").saveAsTable("workspace.vf_gold.catchment_checks")
 spark.sql("COMMENT ON TABLE workspace.vf_gold.catchment_checks IS 'Pass/fail tests for the Voronoi catchments (notebook 12)'")
 display(spark.createDataFrame(ck))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 5. Critical areas for life-threatening emergencies (150 km rule)
+# MAGIC Team rule (2026-11-22): **any area more than 150 km in a straight line from the nearest facility that could handle a life-threatening emergency is a critical area**, whatever its population or deprivation.
+# MAGIC
+# MAGIC "Could handle a life-threatening emergency" is defined here as a facility that
+# MAGIC - has a `good` location flag,
+# MAGIC - states **emergency care or trauma care** in direct wording (strong or moderate claim, no negating text),
+# MAGIC - **and** states an **ICU** in direct wording,
+# MAGIC - **and** has care level 3 or higher (a hospital, not a clinic).
+# MAGIC
+# MAGIC These are the facility's own claims. Nothing here is verified, and availability today is unknown.
+# MAGIC `vf_gold.critical_zones_emergency_150km` has one row per 5 km block that meets the rule; `vf_gold.life_threatening_capable_facilities` lists the facilities used.
+
+# COMMAND ----------
+
+from scipy.spatial import cKDTree
+LT_KM = 150.0
+cap = spark.sql("""
+WITH f AS (
+  SELECT facility_id, MAX(name) AS name, MAX(care_level) AS care_level, MAX(latitude) AS latitude, MAX(longitude) AS longitude,
+         MAX(CASE WHEN service IN ('emergency', 'trauma') AND claim_strength IN ('strong', 'moderate') THEN 1 ELSE 0 END) AS em,
+         MAX(CASE WHEN service = 'icu' AND claim_strength IN ('strong', 'moderate') THEN 1 ELSE 0 END) AS icu
+  FROM workspace.vf_gold.facility_service_canonical
+  WHERE claim_detected AND location_quality_flag = 'good' AND negating_quote IS NULL AND latitude IS NOT NULL
+  GROUP BY facility_id)
+SELECT facility_id, name, care_level, latitude, longitude FROM f WHERE em = 1 AND icu = 1 AND care_level >= 3
+""").toPandas()
+SUMMARY["life_threatening_capable_facilities"] = int(len(cap))
+SUMMARY["critical_150km"] = None
+if table_exists("workspace.vf_gold.access_evidence_gap") and len(cap):
+    blk = spark.sql("""SELECT block_id, latitude, longitude, population, district_id, district_name, state_name, state
+                       FROM workspace.vf_gold.access_evidence_gap WHERE service = 'emergency'""").toPandas()
+    def unit(lat, lon):
+        la, lo = np.radians(np.asarray(lat, float)), np.radians(np.asarray(lon, float))
+        return np.column_stack([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)])
+    chord, idx = cKDTree(unit(cap.latitude, cap.longitude)).query(unit(blk.latitude, blk.longitude))
+    blk["km_to_capable_facility"] = np.round(2 * 6371.0088 * np.arcsin(np.clip(chord / 2, 0, 1)), 1)
+    blk["nearest_capable_facility_id"] = cap.facility_id.to_numpy()[idx]
+    blk["nearest_capable_facility_name"] = cap.name.to_numpy()[idx]
+    blk["population"] = blk.population.astype(float)
+    crit = blk[blk.km_to_capable_facility > LT_KM].copy()
+    crit["zone_type"] = "over 150 km from life-threatening-capable care"
+    crit["criteria"] = ("straight-line km from the block to the nearest facility with a good location that states emergency or trauma care "
+                        "AND an ICU in direct wording and has care level 3+ is over 150; no population or deprivation condition")
+    spark.createDataFrame(crit).write.mode("overwrite").option("overwriteSchema", "true").saveAsTable("workspace.vf_gold.critical_zones_emergency_150km")
+    spark.sql("""COMMENT ON TABLE workspace.vf_gold.critical_zones_emergency_150km IS
+'5 km blocks more than 150 STRAIGHT-LINE km from the nearest facility that claims emergency or trauma care plus an ICU in direct wording at care level 3+. Self-reported claims, not verified; only facilities in this dataset. An extra way to be a critical area, alongside vf_gold.critical_zones (notebook 12).'""")
+    spark.createDataFrame(cap).write.mode("overwrite").option("overwriteSchema", "true").saveAsTable("workspace.vf_gold.life_threatening_capable_facilities")
+    spark.sql("COMMENT ON TABLE workspace.vf_gold.life_threatening_capable_facilities IS 'Facilities used for the 150 km critical-area rule: good location, direct emergency or trauma claim, direct ICU claim, care level 3+. Claims only, not verified (notebook 12).'")
+    by_state = crit.groupby("state_name").agg(blocks=("block_id", "size"), people=("population", "sum")).sort_values("people", ascending=False).head(12).round(0).reset_index()
+    SUMMARY["critical_150km"] = {"blocks": int(len(crit)), "blocks_total": int(len(blk)), "people": float(round(crit.population.sum())),
+                                 "people_total": float(round(blk.population.sum())), "area_km2_approx": int(len(crit) * 25),
+                                 "districts_touched": int(crit.district_id.nunique()),
+                                 "max_km": float(crit.km_to_capable_facility.max()) if len(crit) else None,
+                                 "top_states": by_state.to_dict("records")}
+    display(spark.createDataFrame(by_state))
 
 # COMMAND ----------
 
