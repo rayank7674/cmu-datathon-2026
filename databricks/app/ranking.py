@@ -90,6 +90,10 @@ def rank(candidates: pd.DataFrame, context: dict):
             first = f"Its care level ({lvl}) meets the usual minimum for this service ({min_level})."
         else:
             first = f"Its care level ({lvl}) is below the usual minimum for this service ({min_level}), so it is listed after the others."
+        if bool(r.get("directory_only", False)):
+            second = ("The facility does not state this service itself; it is listed in the national blood "
+                      "centre directory, so it is listed after facilities that state it directly.")
+            return f"{first} {second} It is about {r['km']:.0f} km away in a straight line."
         second = ("It states the service directly." if r["direct_claim"] else
                   "It only has a label or indirect wording for the service, so it is listed after direct claims.")
         return f"{first} {second} It is about {r['km']:.0f} km away in a straight line."

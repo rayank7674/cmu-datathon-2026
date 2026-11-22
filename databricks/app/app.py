@@ -84,6 +84,12 @@ def optional(fn):
 
 @st.cache_data(ttl=3600, show_spinner="Loading service claims...")
 def load_claims() -> pd.DataFrame:
+    df = _claims_query("c.claim_detected")
+    df["directory_only"] = False
+    return df
+
+
+def _claims_query(where: str) -> pd.DataFrame:
     df = query(f"""
         SELECT c.facility_id, c.name, c.state, c.district, c.facility_type, c.level_kind,
                c.service, c.service_label, c.care_level, c.service_specific_level,
@@ -101,10 +107,28 @@ def load_claims() -> pd.DataFrame:
         FROM {GOLD}.facility_service_canonical c
         LEFT JOIN {SILVER}.facilities f ON f.facility_id = c.evidence_facility_id
         LEFT JOIN {GOLD}.facility_level_canonical l ON l.facility_id = c.facility_id
-        WHERE c.claim_detected
+        WHERE {where}
     """)
     for col in ("latitude", "longitude", "care_level", "quality_score"):
         df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+DIRECTORY_LABEL = "listed in the national blood centre directory"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_directory_blood_banks() -> pd.DataFrame:
+    """Facilities with no blood bank claim of their own that the eRaktKosh
+    directory lists as a Blood Bank. Directory evidence only: not verified,
+    nothing about stock or whether it is working today."""
+    df = _claims_query("NOT c.claim_detected AND c.service = 'blood_bank' "
+                       "AND c.verification_source = 'eraktkosh' "
+                       "AND c.verification_status = 'externally_supported'")
+    df["claim_strength"] = "directory listing"
+    df["claim_basis"] = DIRECTORY_LABEL
+    df["supporting_quote"] = None
+    df["directory_only"] = True
     return df
 
 
@@ -354,6 +378,10 @@ def search_form(key, claims, districts, default_radius=50):
 
 def run_search(claims, search, profile):
     cand = claims[claims["service"] == search["service"]]
+    if search["service"] == "blood_bank":
+        extra = optional(load_directory_blood_banks)
+        if extra is not None and len(extra):
+            cand = pd.concat([cand, extra], ignore_index=True)
     return rank(cand, {**search, "profile": profile})
 
 
@@ -392,7 +420,11 @@ def results_header(search, labels, ranked, unplaced):
     safety_block()
     st.subheader(f"{labels[search['service']]} near {search['label']}")
     st.warning(PLACEHOLDER_NOTE, icon="⚠️")
-    notes = [f"{len(ranked)} facilities in this dataset say they offer this within {search['radius_km']} km (straight line)."]
+    n_dir = int(ranked["directory_only"].fillna(False).astype(bool).sum()) if "directory_only" in ranked else 0
+    notes = [f"{len(ranked) - n_dir} facilities in this dataset say they offer this within {search['radius_km']} km (straight line)."]
+    if n_dir:
+        notes.append(f"{n_dir} more {'is' if n_dir == 1 else 'are'} {DIRECTORY_LABEL} without the facility text saying so "
+                     "themselves (directory evidence only, not verified, no information on current stock).")
     if search.get("approx"):
         notes.append(search["approx"])
     notes.append("The dataset covers about 10,000 facilities, so real facilities nearby may be missing.")
@@ -412,11 +444,17 @@ def patient_card(r, profile, key):
 
         quote = clean(r["supporting_quote"])
         field = FIELD_PLAIN.get(r["source_field"], f"its {r['source_field']} field")
-        st.markdown(f"**What it says:** it offers **{r['service_label'].lower()}**.")
-        if quote:
+        directory_only = bool(r.get("directory_only"))
+        if directory_only:
+            st.markdown(f"**Blood bank: {DIRECTORY_LABEL}** (eRaktKosh). The facility's own text does not mention "
+                        "one. This is a directory listing only: it is not verified and says nothing about "
+                        "blood stock or whether the bank is working today.")
+        else:
+            st.markdown(f"**What it says:** it offers **{r['service_label'].lower()}**.")
+        if quote and not directory_only:
             st.markdown(f"> “{quote}”\n>\n> from {field} · {source_link(r)}")
         c1, c2 = st.columns(2)
-        c1.markdown(f"**How sure are we?**  \n{STRENGTH_PLAIN.get(r['claim_strength'], 'Unknown.')}")
+        c1.markdown(f"**How sure are we?**  \n{'Directory listing only: the facility itself does not say this.' if directory_only else STRENGTH_PLAIN.get(r['claim_strength'], 'Unknown.')}")
         c2.markdown(f"**Has anyone checked?**  \n{VERIFY_PLAIN.get(r['verification_status'], 'Not checked.')}")
         if clean(r["plausibility_flag"]):
             st.markdown(f"⚠️ **Treat with care:** {r['plausibility_flag']}.")
@@ -569,7 +607,9 @@ def tab_emrs(claims, districts):
     r = top[top["facility_id"] == pick].iloc[0]
     with st.container(border=True):
         c1, c2, c3 = st.columns(3)
-        c1.markdown(f"**Claim:** {r['service_label']} ({r['claim_strength']}, {r['claim_basis']})  \n"
+        c1.markdown((f"**No claim by the facility.** Blood bank {DIRECTORY_LABEL} (eRaktKosh): directory evidence only, "
+                     "not verified, no information on current stock.  \n" if bool(r.get("directory_only")) else "") +
+                    f"**Claim:** {r['service_label']} ({r['claim_strength']}, {r['claim_basis']})  \n"
                     f"**Quote:** “{clean(r['supporting_quote']) or 'none'}” ({r['source_field']})  \n"
                     f"**Source:** {source_link(r)}")
         c2.markdown(f"**Verification:** {r['verification_status']}"

@@ -367,6 +367,7 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-22 | Team rule: any area over 150 km (straight line) from a facility that could handle a life-threatening emergency is a critical area. `vf_gold.critical_zones_emergency_150km` built in notebook 12 and striped on every service map in the app. See section 17.1 |
 | 2026-11-22 | Two raw government files saved: NMC MBBS colleges (839 rows) and eRaktKosh blood centres (6,524 rows), as `vf_bronze.ext_nmc_colleges_raw` and `vf_bronze.ext_eraktkosh_blood_centres_raw`, with files in the `vf_bronze.external` volume and `external_sources/`. Not matched yet. `External Sources.md` added. See section 14.1 |
 | 2026-11-22 | Task D evidence integrated into chunk C: notebook 09 reads NABH and eRaktKosh matches (at most `externally_supported`, 0 verified), new notebook 13 builds `facility_external_summary`, `facility_external_evidence`, `facility_external_conflicts`, `facility_external_review` and 15 checks (all pass). See section 18 |
+| 2026-11-22 | App: blood bank search now also shows the 29 facilities that eRaktKosh lists as a Blood Bank without a claim of their own, labelled as a directory listing only (`app.py`, `ranking.py`). See section 18.6 |
 
 ## 12. Implemented: service search tables (chunk C, notebook 09)
 
@@ -922,7 +923,7 @@ No consumer should read `ext_facility_matches` or `facility_external_review` dir
 
 - No NABH validity dates, so "currently accredited" cannot be shown for any facility.
 - NABH matching is name plus pincode only. A same-named facility in the same pincode would be a wrong match; this has not been hand checked.
-- eRaktKosh is a directory, not live stock. The 29 facilities listed with a blood bank but no claim in their own text have a `blood_bank` row in `facility_verification` but are not in `facility_service`, so the app's blood bank search does not show them.
+- eRaktKosh is a directory, not live stock. The 29 facilities listed with a blood bank but no claim in their own text have no claim of their own, so `claim_detected` stays false for them. Since 2026-11-22 (Ishaan's decision) the app's blood bank search in the Patients and EMRs tabs adds them, ranked after facilities that state the service directly and labelled "listed in the national blood centre directory": directory evidence only, not verified, no information on current stock. The Policy maps and the symptom recommender still use the facilities' own claims only.
 - Wikidata beds and founding years are community edited and undated.
 - Still not loaded: PM-JAY, CGHS, HMIS, National Hospital Directory, Government Health Centres Directory. Their absence says nothing about a facility.
 - `ext_source_status` belongs to Task D and was not edited here.
