@@ -340,7 +340,8 @@ if spark.catalog.tableExists('workspace.vf_silver.ext_facilities_clean'):
     (F.col(zip_col).cast('string') if zip_col else F.lit(None).cast('string')).alias('fpin'))
  e=e.select('source','source_record_id',F.col('name').alias('ext_name'),F.col('latitude').alias('elat'),
      F.col('longitude').alias('elon'),F.col('pincode').alias('epin'),'source_ref','source_type','confidence')
- f=f.withColumn('fpin',F.when(F.col('fpin').rlike('^[1-9][0-9]{5}$'),'fpin'))
+ # F.when's value arg treats a bare string as a LITERAL, not a column: must be F.col('fpin') or the pincode path never matches.
+ f=f.withColumn('fpin',F.when(F.col('fpin').rlike('^[1-9][0-9]{5}$'),F.col('fpin')))
  # Split generic tokens out so 'General Hospital' vs 'General Hospital' cannot match without distinctive name words.
  STOP=['hospital','hospitals','health','healthcare','medical','centre','center','clinic','clinics','and','the','of','private','govt','government','general','district','civil','nursing','home','care','trust','limited','ltd','pvt','india','multispeciality','multispecialty','institute']
  def add_norm(df,prefix,col):
