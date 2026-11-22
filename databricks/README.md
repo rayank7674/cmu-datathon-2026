@@ -363,6 +363,7 @@ This was tested on 2026-11-21 with a two-row sample, which produced the correct 
 | 2026-11-21 | Chunk E: district polygons, 1 km population grid, crosswalk, `district_context`, straight-line access grid, evidence gap, critical zones, routing function (11). See section 15 |
 | 2026-11-22 | Chunk F: app shell deployed as Databricks App `vf-facility-finder` (folder `app/`); `vf_gold.feedback_reports` created. Ranking is a labelled placeholder. See section 16 |
 | 2026-11-22 | Voronoi catchments per service and evidence tier built (12), 5 of 5 checks passing, and added to the app's Policy tab as the default national map. See section 17 |
+| 2026-11-22 | App map restyle: catchments are shaded by straight-line distance from their facility (dark at the facility, fading outward), one teal ramp across the Policy tab with dark = close everywhere. See section 17 |
 
 ## 12. Implemented: service search tables (chunk C, notebook 09)
 
@@ -803,7 +804,7 @@ Run locally against the real tables with a headless browser: all three tabs rend
 
 **Measured.** 31,813 catchments across 14 services and two tiers (34,965 polygon pieces, since coasts and islands split some). For every service and tier the areas sum to 100.00% of the outline and the people inside sum to 1.378 billion. Median catchment for emergency care is 16 km² on any claim and 305 km² on better-evidenced claims; for stroke care it is 3,211 km² and 33,666 km².
 
-**In the app.** The Policy tab's national map defaults to "Catchments (Voronoi)", shaded by area or by people inside, with the evidence-tier switch redrawing it. The district zoom shows catchment edges as dark lines. District circles remain as a second view.
+**In the app.** The Policy tab's national map defaults to "Catchments (Voronoi)" with the evidence-tier switch redrawing it. By default each catchment is shaded by straight-line distance from its facility: darkest at the facility, fading to pale at 120 km or more (square-root scale, so 30 km is the middle of the ramp). The shading is an image the app computes at about 3 km per pixel from the catchment facilities, drawn on a Web-Mercator grid so it lines up with the map, with catchment edges as thin lines on top. Shading by area or by people inside is still available. The whole tab uses one teal ramp where dark always means close to a listed facility and pale means far. The district zoom shows catchment edges as dark lines. District circles remain as a second view.
 
 **Tests** (`vf_gold.catchment_checks`, 5 of 5 pass): full coverage of India, one catchment per facility point, no suspect locations, valid polygons, better-evidenced never exceeds claimed.
 

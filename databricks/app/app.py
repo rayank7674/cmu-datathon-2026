@@ -7,6 +7,8 @@ status and what is still unknown.
 This is facility discovery, NOT medical triage. Ranking is a labelled
 placeholder that lives in ranking.rank().
 """
+import base64
+import io
 import json
 import os
 import uuid
@@ -362,7 +364,7 @@ def results_map(ranked, search, height=380):
     pts["tip"] = pts.apply(lambda r: f"#{int(r['rank'])} {r['name']} · {r['km']:.0f} km", axis=1)
     start = pd.DataFrame([{"latitude": search["lat"], "longitude": search["lon"], "tip": "Starting point"}])
     layers = [
-        pdk.Layer("ScatterplotLayer", pts, get_position="[longitude, latitude]", get_fill_color=[42, 120, 214, 210],
+        pdk.Layer("ScatterplotLayer", pts, get_position="[longitude, latitude]", get_fill_color=[20, 116, 107, 230],
                   get_line_color=[255, 255, 255], stroked=True, line_width_min_pixels=1,
                   radius_min_pixels=5, radius_max_pixels=9, get_radius=400, pickable=True),
         pdk.Layer("ScatterplotLayer", start, get_position="[longitude, latitude]", get_fill_color=[30, 30, 30, 255],
@@ -373,7 +375,7 @@ def results_map(ranked, search, height=380):
     st.pydeck_chart(pdk.Deck(layers=layers, tooltip={"text": "{tip}"},
                              initial_view_state=pdk.ViewState(latitude=search["lat"], longitude=search["lon"], zoom=zoom)),
                     height=height)
-    st.caption("Blue dots: facilities that claim the service. Black dot: your starting point. Hover a dot for its name.")
+    st.caption("Teal dots: facilities that claim the service. Black dot: your starting point. Hover a dot for its name.")
 
 
 def results_header(search, labels, ranked, unplaced):
@@ -559,8 +561,79 @@ def tab_emrs(claims, districts):
 # --------------------------------------------------------------------------
 # Policy view
 # --------------------------------------------------------------------------
-BLUE_RAMP = [(205, 226, 251), (158, 197, 244), (109, 167, 236), (57, 135, 229),
-             (37, 106, 191), (24, 79, 149), (13, 54, 107)]
+# One teal ramp for the whole tab, ordered dark -> pale. Dark always means "close to a
+# listed facility / well served", pale means "far". (Name kept from the first version.)
+BLUE_RAMP = [(11, 79, 74), (20, 116, 107), (42, 157, 143), (92, 184, 171),
+             (143, 208, 197), (194, 229, 222), (233, 245, 242)]
+FAC_FILL, FAC_LINE = [255, 255, 255, 240], [11, 79, 74, 255]
+GRADIENT_MAX_KM = 120.0
+
+
+def _merc(lat):
+    return np.log(np.tan(np.pi / 4 + np.radians(lat) / 2))
+
+
+def _unit(lat, lon):
+    la, lo = np.radians(lat), np.radians(lon)
+    return np.column_stack([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)])
+
+
+@st.cache_data(ttl=3600, show_spinner="Drawing distance shading...")
+def distance_image(service: str, tier: str):
+    """PNG of straight-line distance to the nearest catchment facility, dark near -> pale far.
+
+    Drawn on a Web-Mercator grid (about 3 km per pixel) so it lines up with the map, and
+    masked to the catchment polygons, which are already clipped to India.
+    Returns (data_url, [west, south, east, north]).
+    """
+    from PIL import Image, ImageDraw
+    from scipy.spatial import cKDTree
+
+    cat = load_catchments(service, tier)
+    west, east, south, north = 67.9, 97.6, 6.4, 37.3
+    W = 1000
+    m_s, m_n = _merc(south), _merc(north)
+    H = int(round(W * (m_n - m_s) / np.radians(east - west)))
+    lons = west + (np.arange(W) + 0.5) / W * (east - west)
+    merc = m_n - (np.arange(H) + 0.5) / H * (m_n - m_s)
+    lats = np.degrees(2 * np.arctan(np.exp(merc)) - np.pi / 2)
+    glon, glat = np.meshgrid(lons, lats)
+
+    pts = cat.drop_duplicates("facility_id")
+    tree = cKDTree(_unit(pts["facility_latitude"].to_numpy(float), pts["facility_longitude"].to_numpy(float)))
+    chord, _ = tree.query(_unit(glat.ravel(), glon.ravel()))
+    km = (2 * 6371.0088 * np.arcsin(np.clip(chord / 2, 0, 1))).reshape(H, W)
+
+    t = np.sqrt(np.clip(km / GRADIENT_MAX_KM, 0, 1))          # sqrt: more detail close to facilities
+    stops = np.array(BLUE_RAMP, dtype=float)
+    pos = t * (len(stops) - 1)
+    lo = np.floor(pos).astype(int).clip(0, len(stops) - 2)
+    frac = (pos - lo)[..., None]
+    rgb = stops[lo] * (1 - frac) + stops[lo + 1] * frac
+
+    mask = Image.new("L", (W, H), 0)
+    draw = ImageDraw.Draw(mask)
+    for ring in cat["polygon"]:
+        a = np.asarray(ring, dtype=float)
+        x = (a[:, 0] - west) / (east - west) * W
+        y = (m_n - _merc(a[:, 1])) / (m_n - m_s) * H
+        draw.polygon(list(zip(x.tolist(), y.tolist())), fill=235)
+    rgba = np.dstack([rgb, np.asarray(mask, dtype=float)]).round().astype("uint8")
+    buf = io.BytesIO()
+    Image.fromarray(rgba, "RGBA").save(buf, format="PNG", optimize=True)
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode(), [west, south, east, north]
+
+
+def gradient_legend(extra=""):
+    css = ", ".join(f"rgb{c}" for c in BLUE_RAMP)
+    st.markdown(
+        "<div style='font-size:0.8rem;display:flex;align-items:center;flex-wrap:wrap;gap:10px'>"
+        "<span>Straight-line distance from the catchment's facility:</span>"
+        "<span>at the facility</span>"
+        f"<span style='display:inline-block;width:220px;height:12px;border-radius:3px;background:linear-gradient(90deg, {css})'></span>"
+        f"<span>{GRADIENT_MAX_KM:.0f} km or more</span>"
+        "<span style='color:#666'>(the middle of the bar is 30 km)</span>"
+        f"{extra}</div>", unsafe_allow_html=True)
 KM_BREAKS = [10, 20, 30, 45, 60, 100]
 KM_LABELS = ["under 10", "10-20", "20-30", "30-45", "45-60", "60-100", "over 100"]
 
@@ -568,7 +641,7 @@ KM_LABELS = ["under 10", "10-20", "20-30", "30-45", "45-60", "60-100", "over 100
 def km_colour(km):
     if km is None or np.isnan(km):
         return [200, 200, 200, 160]
-    return [*BLUE_RAMP[int(np.searchsorted(KM_BREAKS, km, side="right"))], 215]
+    return [*BLUE_RAMP[int(np.searchsorted(KM_BREAKS, km, side="right"))], 225]
 
 
 AREA_BREAKS = [25, 150, 750, 3000, 10000, 30000]
@@ -577,17 +650,18 @@ PEOPLE_BREAKS = [1e5, 2.5e5, 5e5, 1e6, 2.5e6, 5e6]
 PEOPLE_LABELS = ["under 0.1M", "0.1-0.25M", "0.25-0.5M", "0.5-1M", "1-2.5M", "2.5-5M", "over 5M"]
 
 
-def ramp_colour(v, breaks, alpha=190):
+def ramp_colour(v, breaks, alpha=225, reverse=False):
     if v is None or np.isnan(v):
-        return [200, 200, 200, 120]
-    return [*BLUE_RAMP[int(np.searchsorted(breaks, v, side="right"))], alpha]
+        return [215, 215, 215, 140]
+    ramp = BLUE_RAMP[::-1] if reverse else BLUE_RAMP
+    return [*ramp[int(np.searchsorted(breaks, v, side="right"))], alpha]
 
 
-def ramp_legend(title, labels_, extra=""):
+def ramp_legend(title, labels_, extra="", reverse=False):
     chips = "".join(
         f"<span style='display:inline-flex;align-items:center;margin-right:10px'>"
         f"<span style='width:12px;height:12px;border-radius:2px;background:rgb{c};display:inline-block;margin-right:4px'></span>{lab}</span>"
-        for c, lab in zip(BLUE_RAMP, labels_))
+        for c, lab in zip(BLUE_RAMP[::-1] if reverse else BLUE_RAMP, labels_))
     st.markdown(f"<div style='font-size:0.8rem'>{title}: {chips}{extra}</div>", unsafe_allow_html=True)
 
 
@@ -631,7 +705,7 @@ def tab_policy(claims, facilities, districts, access):
         pts["tip"] = pts["name"]
         st.pydeck_chart(pdk.Deck(
             layers=[pdk.Layer("ScatterplotLayer", pts, get_position="[longitude, latitude]",
-                              get_fill_color=[42, 120, 214, 180], radius_min_pixels=2, get_radius=1500, pickable=True)],
+                              get_fill_color=[20, 116, 107, 200], radius_min_pixels=2, get_radius=1500, pickable=True)],
             tooltip={"text": "{tip}"},
             initial_view_state=pdk.ViewState(latitude=22.5, longitude=80, zoom=3.8)), height=560)
         return
@@ -650,40 +724,51 @@ def tab_policy(claims, facilities, districts, access):
     tier_key = "claimed" if tier == "Any claim" else "better_evidenced"
     cat = optional(lambda: load_catchments(service, tier_key))
     FAC_CHIP = ("<span style='display:inline-flex;align-items:center'><span style='width:8px;height:8px;border-radius:50%;"
-                "background:rgb(230,120,20);display:inline-block;margin-right:4px'></span>facility claiming the service</span>")
+                "background:#fff;border:2px solid rgb(11,79,74);display:inline-block;margin-right:4px'></span>facility claiming the service</span>")
     v1, v2, v3 = st.columns([2, 2, 2])
     views = (["Catchments (Voronoi)"] if cat is not None else []) + ["District circles"]
     view = v1.radio("Map view", views, horizontal=True, key="g_view")
-    shade = v2.radio("Shade catchments by", ["Area", "People inside"], horizontal=True, key="g_shade",
+    shade = v2.radio("Shade catchments by", ["Distance from its facility", "Area", "People inside"], horizontal=True, key="g_shade",
                      disabled=view != "Catchments (Voronoi)")
     show_fac = v3.checkbox("Show facilities that claim the service", value=True, key="g_fac")
     fac_layer = pdk.Layer("ScatterplotLayer", fpts, get_position="[longitude, latitude]",
-                          get_fill_color=[230, 120, 20, 230], radius_min_pixels=1.5, radius_max_pixels=5,
-                          get_radius=900, pickable=True)
+                          get_fill_color=FAC_FILL, get_line_color=FAC_LINE, stroked=True, line_width_min_pixels=1,
+                          radius_min_pixels=2, radius_max_pixels=6, get_radius=900, pickable=True)
     if view == "Catchments (Voronoi)":
         c = cat.copy()
-        if shade == "Area":
-            c["colour"] = c["area_km2"].apply(lambda v: ramp_colour(v, AREA_BREAKS))
-        else:
-            c["colour"] = c["population"].apply(lambda v: ramp_colour(v, PEOPLE_BREAKS))
         c["tip"] = c.apply(lambda r: (f"Nearest listed facility: {r['facility_name']}\n"
                                       f"Catchment area {r['area_km2']:,.0f} km²\n"
                                       + (f"About {r['population'] / 1e6:.2f} million people inside"
                                          if pd.notna(r["population"]) else "People inside: unknown")), axis=1)
-        layers = [pdk.Layer("PolygonLayer", c[["polygon", "colour", "tip"]], get_polygon="polygon",
-                            get_fill_color="colour", get_line_color=[255, 255, 255, 200], line_width_min_pixels=0.6,
-                            stroked=True, filled=True, pickable=True)]
+        if shade == "Distance from its facility":
+            img, bounds = distance_image(service, tier_key)
+            c["colour"] = [[0, 0, 0, 0]] * len(c)
+            layers = [pdk.Layer("BitmapLayer", image=pdk.types.String(img), bounds=bounds, opacity=1.0),
+                      pdk.Layer("PolygonLayer", c[["polygon", "colour", "tip"]], get_polygon="polygon",
+                                get_fill_color="colour", get_line_color=[11, 79, 74, 110],
+                                line_width_min_pixels=0.8, stroked=True, filled=True, pickable=True)]
+        else:
+            if shade == "Area":
+                c["colour"] = c["area_km2"].apply(lambda v: ramp_colour(v, AREA_BREAKS))
+            else:
+                c["colour"] = c["population"].apply(lambda v: ramp_colour(v, PEOPLE_BREAKS, reverse=True))
+            layers = [pdk.Layer("PolygonLayer", c[["polygon", "colour", "tip"]], get_polygon="polygon",
+                                get_fill_color="colour", get_line_color=[255, 255, 255, 200], line_width_min_pixels=0.6,
+                                stroked=True, filled=True, pickable=True)]
         if show_fac:
             layers.append(fac_layer)
         st.pydeck_chart(pdk.Deck(layers=layers, tooltip={"text": "{tip}"},
                                  initial_view_state=pdk.ViewState(latitude=22.5, longitude=80.5, zoom=3.9)), height=620)
-        if shade == "Area":
+        if shade == "Distance from its facility":
+            gradient_legend(FAC_CHIP)
+        elif shade == "Area":
             ramp_legend("Catchment area in km²", AREA_LABELS, FAC_CHIP)
         else:
-            ramp_legend("People living inside the catchment", PEOPLE_LABELS, FAC_CHIP)
+            ramp_legend("People living inside the catchment", PEOPLE_LABELS, FAC_CHIP, reverse=True)
         st.caption(f"{len(c['facility_id'].unique()):,} catchments. Each shape is the area closer, in a straight line, to one "
-                   "listed facility than to any other that claims this service. Big shapes mean one facility is the "
-                   "nearest option for a wide area. Facilities with a suspect location are left out. This is not travel "
+                   "listed facility than to any other that claims this service. Colour is darkest at the facility and "
+                   "fades as you move away from it, so pale areas are far from any listed facility. Big shapes mean one "
+                   "facility is the nearest option for a wide area. Facilities with a suspect location are left out. This is not travel "
                    "time or a referral area, and it only knows the facilities in this dataset. Switch the evidence tier "
                    "above to see how the picture changes when weak claims are removed.")
     else:
@@ -696,7 +781,7 @@ def tab_policy(claims, facilities, districts, access):
                                  initial_view_state=pdk.ViewState(latitude=22.5, longitude=80.5, zoom=3.9)), height=620)
         legend(FAC_CHIP)
         st.caption("One circle per district, placed at its centre and sized by population. Darker means the average "
-                   "resident is further from the nearest facility claiming the service. Hover for figures.")
+                   "resident is closer to the nearest facility claiming the service; pale means far. Hover for figures.")
 
     m = st.columns(4)
     far = d[d["km"] > 30]
@@ -734,7 +819,7 @@ def tab_policy(claims, facilities, districts, access):
     claim_ids = set(svc_fac["facility_id"])
     near = near[near["km0"] <= span].copy()
     near["claims"] = near["facility_id"].isin(claim_ids)
-    near["colour"] = near["claims"].map({True: [230, 120, 20, 240], False: [130, 130, 130, 150]})
+    near["colour"] = near["claims"].map({True: [255, 255, 255, 245], False: [150, 150, 150, 170]})
     near["tip"] = near.apply(lambda r: f"{r['name']}\n{'claims ' + labels[service] if r['claims'] else 'does not claim it'}"
                                        f"\ncare level {clean(r['care_level']) or 'unknown'}", axis=1)
     layers = []
@@ -761,7 +846,7 @@ def tab_policy(claims, facilities, districts, access):
                                 line_width_min_pixels=1.2, pickable=False))
     layers.append(pdk.Layer("ScatterplotLayer", near[["latitude", "longitude", "colour", "tip"]],
                             get_position="[longitude, latitude]", get_fill_color="colour", get_radius=700,
-                            get_line_color=[255, 255, 255], stroked=True, line_width_min_pixels=1,
+                            get_line_color=FAC_LINE, stroked=True, line_width_min_pixels=1.5,
                             radius_min_pixels=4, radius_max_pixels=8, pickable=True))
     zoom = 9.2 if span <= 60 else 8.4 if span <= 110 else 7.4
     st.pydeck_chart(pdk.Deck(layers=layers, tooltip={"text": "{tip}"},
@@ -769,7 +854,7 @@ def tab_policy(claims, facilities, districts, access):
                                                               longitude=float(row["centre_lon"]), zoom=zoom)), height=560)
     if blocks is None:
         st.caption("No distance blocks for this district and service, so the map shows facility points only.")
-    legend("<span style='margin-right:10px'>🟠 claims the service</span><span style='margin-right:10px'>⚪ other facility</span>"
+    legend("<span style='margin-right:10px'>white dot = claims the service</span><span style='margin-right:10px'>grey dot = other facility</span>"
            "<span style='margin-right:10px'>🔴 ring = critical zone (far, populated, deprived)</span>"
            "<span>dark lines = catchment edges</span>")
     st.caption("Each square of colour is a 5 km block. Critical zones exist for 8 of the 14 services. "
